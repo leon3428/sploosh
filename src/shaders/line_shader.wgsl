@@ -1,3 +1,6 @@
+@group(0) @binding(0) // 1.
+var<uniform> mvp: mat4x4<f32>;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
 };
@@ -11,7 +14,7 @@ fn vs_main(
     input: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = vec4<f32>(input.position, 1.0);
+    out.clip_position = mvp * vec4<f32>(input.position, 1.0);
     return out;
 }
 

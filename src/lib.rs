@@ -4,6 +4,7 @@ use winit;
 
 pub mod application;
 pub mod graphics;
+pub mod input_helper;
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     let event_loop = winit::event_loop::EventLoop::new()?;

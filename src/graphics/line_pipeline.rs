@@ -3,19 +3,36 @@ use super::geometry::{self, Geometry};
 pub fn create_pipeline(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
-) -> wgpu::RenderPipeline {
+) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Line Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/line_shader.wgsl").into()),
     });
 
+    let camera_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Camera bind group layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Line render pipeline layout"),
-        bind_group_layouts: &[],
+        bind_group_layouts: &[
+            &camera_bind_group_layout
+        ],
         push_constant_ranges: &[],
     });
 
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Line render pipeline"),
         layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
@@ -51,5 +68,7 @@ pub fn create_pipeline(
         },
         multiview: None,
         cache: None,
-    })
+    });
+
+    (pipeline, camera_bind_group_layout)
 }
