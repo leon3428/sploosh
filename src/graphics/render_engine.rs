@@ -4,7 +4,7 @@ use nalgebra::{Matrix4, Perspective3, Vector3};
 use winit::window::Window;
 
 use super::{
-    camera::Camera, geometry::{self, Geometry}, line_pipeline
+    camera::Camera, geometry::Geometry, line_pipeline
 };
 
 pub struct RenderEngine {
@@ -20,7 +20,7 @@ pub struct RenderEngine {
     mvp_bind_group: wgpu::BindGroup,
 
     line_pipeline: wgpu::RenderPipeline,
-    line_geometry: geometry::Line,
+    line_geometry: Geometry,
 }
 
 impl RenderEngine {
@@ -82,7 +82,7 @@ impl RenderEngine {
             mapped_at_creation: false,
         });
 
-        let (line_pipeline, camera_bind_group_layout) = line_pipeline::create_pipeline(&device, &config);
+        let (line_pipeline, camera_bind_group_layout) = line_pipeline::create_pipeline(&device, config.format);
 
         let mvp_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera bind group"),
@@ -95,7 +95,7 @@ impl RenderEngine {
             ],
         });
 
-        let lines = vec![
+        let lines: [Vector3<f32>; 8] = [
             Vector3::new(0.1, 0.1, 0.0),
             Vector3::new(-0.1, 0.1, 0.0),
             Vector3::new(-0.1, 0.1, 0.0),
@@ -105,7 +105,7 @@ impl RenderEngine {
             Vector3::new(0.1, -0.1, 0.0),
             Vector3::new(0.1, 0.1, 0.0),
         ];
-        let line_geometry = geometry::Line::new(&device, lines);
+        let line_geometry = Geometry::new(&device, &queue, &lines[..]);
 
         let camera = Camera::new();
 
@@ -121,6 +121,10 @@ impl RenderEngine {
             mvp_buffer,
             mvp_bind_group
         })
+    }
+
+    pub fn create_geometry<T>(&self, vertices: &[T]) -> Geometry {
+        Geometry::new(&self.device, &self.queue, vertices)
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -182,7 +186,7 @@ impl RenderEngine {
             render_pass.set_pipeline(&self.line_pipeline);
             render_pass.set_bind_group(0, &self.mvp_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.line_geometry.get_vertices());
-            render_pass.draw(0..self.line_geometry.vertex_cnt(), 0..1);
+            render_pass.draw(0..self.line_geometry.vertex_cnt() as u32, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

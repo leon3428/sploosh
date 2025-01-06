@@ -1,17 +1,15 @@
-use super::geometry::{self, Geometry};
-
 pub fn create_pipeline(
     device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
+    render_surface_format: wgpu::TextureFormat,
 ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Line Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/line_shader.wgsl").into()),
     });
 
-    let camera_bind_group_layout =
+    let model_view_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Camera bind group layout"),
+            label: Some("Model view bind group layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
@@ -26,9 +24,7 @@ pub fn create_pipeline(
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Line render pipeline layout"),
-        bind_group_layouts: &[
-            &camera_bind_group_layout
-        ],
+        bind_group_layouts: &[&model_view_bind_group_layout],
         push_constant_ranges: &[],
     });
 
@@ -38,14 +34,18 @@ pub fn create_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            buffers: &[geometry::Line::buffer_desc()],
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<nalgebra::Vector3<f32>>() as wgpu::BufferAddress,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+            }],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: config.format,
+                format: render_surface_format,
                 blend: Some(wgpu::BlendState::REPLACE),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -70,5 +70,5 @@ pub fn create_pipeline(
         cache: None,
     });
 
-    (pipeline, camera_bind_group_layout)
+    (pipeline, model_view_bind_group_layout)
 }

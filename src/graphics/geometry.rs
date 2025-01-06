@@ -1,48 +1,38 @@
-use nalgebra::Vector3;
-use wgpu::util::DeviceExt as _;
+use std::num::NonZero;
 
-pub trait Geometry {
-    fn get_vertices(&self) -> wgpu::BufferSlice;
-    fn buffer_desc() -> wgpu::VertexBufferLayout<'static>;
-    fn vertex_cnt(&self) -> u32;
+pub struct Geometry {
+    vertex_buffer: wgpu::Buffer,
+    vertex_cnt: usize,
 }
 
-pub struct Line {
-    vertices: Vec<Vector3<f32>>,
-    buffer: wgpu::Buffer
-}
-
-impl Line {
-    pub fn new(device: &wgpu::Device, vertices: Vec<Vector3<f32>>) -> Self {
-        let len = vertices.len() * std::mem::size_of::<Vector3<f32>>();
+impl Geometry {
+    pub fn new<T>(device: &wgpu::Device, queue: &wgpu::Queue, vertices: &[T]) -> Self {
+        let len = vertices.len() * std::mem::size_of::<T>();
         let ptr = vertices.as_ptr() as *const u8;
 
         let data = unsafe { std::slice::from_raw_parts(ptr, len) };
 
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Line buffer"),
-            contents: data,
-            usage: wgpu::BufferUsages::VERTEX,
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Geometry buffer"),
+            size: len as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
-        Self { vertices, buffer }
-    }
-}
+        let view = queue.write_buffer_with(&vertex_buffer, 0, NonZero::new(len as u64).unwrap());
+        view.unwrap().copy_from_slice(data);
 
-impl Geometry for Line {
-    fn get_vertices(&self) -> wgpu::BufferSlice {
-        self.buffer.slice(..)
-    }
-    
-    fn buffer_desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<nalgebra::Vector3<f32>>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+        Self {
+            vertex_buffer,
+            vertex_cnt: vertices.len(),
         }
     }
-    
-    fn vertex_cnt(&self) -> u32 {
-        self.vertices.len() as u32
+
+    pub fn get_vertices(&self) -> wgpu::BufferSlice {
+        self.vertex_buffer.slice(..)
+    }
+
+    pub fn vertex_cnt(&self) -> usize {
+        self.vertex_cnt
     }
 }
