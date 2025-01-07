@@ -30,17 +30,17 @@ impl Camera {
 
     pub fn update(
         &mut self,
-        right_button_pressed: bool,
+        left_button_pressed: bool,
         mouse_move_delta: (f32, f32),
         mouse_wheel_delta: f32,
     ) {
-        let sensitivity = 0.01;
+        let sensitivity = 0.003;
         let zoom_speed = 0.001;
 
         self.radius += mouse_wheel_delta * zoom_speed;
         self.radius = f32::max(self.radius, self.z_near);
 
-        if right_button_pressed {
+        if left_button_pressed {
             let yaw_rotation = UnitQuaternion::from_axis_angle(
                 &Vector3::y_axis(),
                 -mouse_move_delta.0 * sensitivity,

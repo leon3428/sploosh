@@ -1,11 +1,18 @@
-use std::{error::Error, sync::Arc};
+use std::{collections::HashMap, error::Error, rc::Rc, sync::Arc};
 
-use nalgebra::{Matrix4, Perspective3, Vector3};
+use nalgebra::{Matrix4, Perspective3};
 use winit::window::Window;
 
 use super::{
-    camera::Camera, geometry::Geometry, line_pipeline
+    camera::Camera,
+    geometry::Geometry,
+    materials::{LineMaterial, Material, MaterialType},
 };
+
+pub struct RenderRequest {
+    pub material_type: MaterialType,
+    pub geometry: Rc<Geometry>
+}
 
 pub struct RenderEngine {
     surface: wgpu::Surface<'static>,
@@ -16,11 +23,11 @@ pub struct RenderEngine {
 
     camera: Camera,
 
-    mvp_buffer: wgpu::Buffer,
-    mvp_bind_group: wgpu::BindGroup,
+    view_projection_buffer: wgpu::Buffer,
+    view_projection_bind_group: wgpu::BindGroup,
 
-    line_pipeline: wgpu::RenderPipeline,
-    line_geometry: Geometry,
+    materials: HashMap<MaterialType, Box<dyn Material>>,
+    render_queue: Vec<RenderRequest>
 }
 
 impl RenderEngine {
@@ -75,37 +82,52 @@ impl RenderEngine {
 
         surface.configure(&device, &config);
 
-        let mvp_buffer = device.create_buffer(&wgpu::BufferDescriptor{
+        // Model view buffer initialization
+
+        let view_projection_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("MVP buffer"),
             size: std::mem::size_of::<Matrix4<f32>>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let (line_pipeline, camera_bind_group_layout) = line_pipeline::create_pipeline(&device, config.format);
-
-        let mvp_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Camera bind group"),
-            layout: &camera_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
+        let model_view_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Model view bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    resource: mvp_buffer.as_entire_binding(),
-                }
-            ],
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let view_projection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Camera bind group"),
+            layout: &model_view_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: view_projection_buffer.as_entire_binding(),
+            }],
         });
 
-        let lines: [Vector3<f32>; 8] = [
-            Vector3::new(0.1, 0.1, 0.0),
-            Vector3::new(-0.1, 0.1, 0.0),
-            Vector3::new(-0.1, 0.1, 0.0),
-            Vector3::new(-0.1, -0.1, 0.0),
-            Vector3::new(-0.1, -0.1, 0.0),
-            Vector3::new(0.1, -0.1, 0.0),
-            Vector3::new(0.1, -0.1, 0.0),
-            Vector3::new(0.1, 0.1, 0.0),
-        ];
-        let line_geometry = Geometry::new(&device, &queue, &lines[..]);
+        // Material initialization
+
+        let mut materials: HashMap<MaterialType, Box<dyn Material>> = HashMap::new();
+        materials.insert(
+            MaterialType::Line,
+            Box::new(LineMaterial::new(
+                &device,
+                &model_view_bind_group_layout,
+                config.format,
+            )),
+        );
+
+        // Camera initialization
 
         let camera = Camera::new();
 
@@ -115,11 +137,11 @@ impl RenderEngine {
             queue,
             config,
             size,
-            line_pipeline,
-            line_geometry,
             camera,
-            mvp_buffer,
-            mvp_bind_group
+            view_projection_buffer,
+            view_projection_bind_group,
+            materials,
+            render_queue: Vec::new()
         })
     }
 
@@ -138,11 +160,21 @@ impl RenderEngine {
 
     pub fn update(&self) {}
 
-    pub fn update_camera(&mut self, right_button_pressed: bool, mouse_move_delta: (f32, f32), mouse_wheel_delta: f32) {
-        self.camera.update(right_button_pressed, mouse_move_delta, mouse_wheel_delta);
+    pub fn update_camera(
+        &mut self,
+        left_button_pressed: bool,
+        mouse_move_delta: (f32, f32),
+        mouse_wheel_delta: f32,
+    ) {
+        self.camera
+            .update(left_button_pressed, mouse_move_delta, mouse_wheel_delta);
     }
 
-    pub fn render(&self) -> Result<(), wgpu::SurfaceError> {
+    pub fn submit_render_request(&mut self, render_request: RenderRequest) {
+        self.render_queue.push(render_request);
+    }
+
+    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -154,7 +186,8 @@ impl RenderEngine {
 
         let data = unsafe { std::slice::from_raw_parts(ptr, len) };
 
-        self.queue.write_buffer(&self.mvp_buffer, 0, data);
+        self.queue
+            .write_buffer(&self.view_projection_buffer, 0, data);
 
         let mut encoder = self
             .device
@@ -169,12 +202,7 @@ impl RenderEngine {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -183,10 +211,15 @@ impl RenderEngine {
                 timestamp_writes: None,
             });
 
-            render_pass.set_pipeline(&self.line_pipeline);
-            render_pass.set_bind_group(0, &self.mvp_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.line_geometry.get_vertices());
-            render_pass.draw(0..self.line_geometry.vertex_cnt() as u32, 0..1);
+            render_pass.set_bind_group(0, &self.view_projection_bind_group, &[]);
+
+            for request in &self.render_queue {
+                let material = self.materials.get(&request.material_type).unwrap();
+                material.bind_pipeline(&mut render_pass);
+                material.draw(&request.geometry, &mut render_pass);
+            }
+
+            self.render_queue.clear();
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -197,6 +230,12 @@ impl RenderEngine {
 
     fn get_projection_matrix(&self) -> Matrix4<f32> {
         let aspect = self.config.width as f32 / self.config.height as f32;
-        Perspective3::new(aspect, self.camera.fov, self.camera.z_near, self.camera.z_far).to_homogeneous()
+        Perspective3::new(
+            aspect,
+            self.camera.fov,
+            self.camera.z_near,
+            self.camera.z_far,
+        )
+        .to_homogeneous()
     }
 }

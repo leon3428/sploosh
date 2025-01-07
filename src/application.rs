@@ -7,11 +7,12 @@ use winit::{
     window::Window,
 };
 
-use crate::{graphics::render_engine::RenderEngine, input_helper::InputHelper};
+use crate::{fluid_simulation::FluidSimulation, graphics::render_engine::RenderEngine, input_helper::InputHelper};
 
 pub struct Application {
     window: Option<Arc<Window>>,
     render_engine: Option<RenderEngine>,
+    fluid_sim: Option<FluidSimulation>,
     input_helper: InputHelper,
 }
 
@@ -20,6 +21,7 @@ impl Application {
         Self {
             window: None,
             render_engine: None,
+            fluid_sim: None,
             input_helper: InputHelper::new(),
         }
     }
@@ -31,6 +33,7 @@ impl ApplicationHandler for Application {
             let window_arc = Arc::new(window);
 
             if let Ok(render_engine) = RenderEngine::new(window_arc.clone()).block_on() {
+                self.fluid_sim = Some(FluidSimulation::new(&render_engine));
                 self.render_engine = Some(render_engine);
             } else {
                 self.render_engine = None;
@@ -74,10 +77,12 @@ impl ApplicationHandler for Application {
                     WindowEvent::RedrawRequested => {
                         render_engine.update_camera(
                             self.input_helper
-                                .is_mouse_button_pressed(winit::event::MouseButton::Right),
+                                .is_mouse_button_pressed(winit::event::MouseButton::Left),
                             self.input_helper.mouse_delta(),
                             self.input_helper.mouse_wheel_delta(),
                         );
+
+                        self.fluid_sim.as_mut().unwrap().update(render_engine);
 
                         render_engine.render().expect("Render engine failed");
 
