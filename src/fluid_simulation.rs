@@ -12,7 +12,7 @@ pub struct FluidSimulation {
     particle_cnt: usize,
     smoothing_radius: f32,
     bbox_dimensions: Vector3<f32>,
-    
+
     bbox_geometry: Geometry,
     position_buffer: Rc<wgpu::Buffer>,
     velocity_buffer: Rc<wgpu::Buffer>,
@@ -84,13 +84,19 @@ impl FluidSimulation {
         let mut positions = Vec::with_capacity(particle_cnt);
         let n = f32::ceil(f32::powf(particle_cnt as f32, 1.0 / 3.0)) as usize;
 
+        let half = ((n - 1) as f32 * smoothing_radius * 0.95) / 2.0;
+
         'outer: for i in 0..n {
             for j in 0..n {
                 for k in 0..n {
+                    let jitter_x = (rand::random::<f32>() - 0.5) / 200.0;
+                    let jitter_y = (rand::random::<f32>() - 0.5) / 200.0;
+                    let jitter_z = (rand::random::<f32>() - 0.5) / 200.0;
+
                     positions.push(Point3::new(
-                        j as f32 * smoothing_radius * 0.95,
-                        i as f32 * smoothing_radius * 0.95,
-                        k as f32 * smoothing_radius * 0.95,
+                        j as f32 * smoothing_radius * 0.95 - half + jitter_x,
+                        i as f32 * smoothing_radius * 0.95 - half + jitter_y,
+                        k as f32 * smoothing_radius * 0.95 - half + jitter_z,
                     ));
                     if positions.len() >= particle_cnt {
                         break 'outer;
