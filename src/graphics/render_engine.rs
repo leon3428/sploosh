@@ -1,17 +1,26 @@
-use std::{collections::HashMap, error::Error, rc::Rc, sync::Arc};
+use std::{collections::HashMap, error::Error, num::NonZero, rc::Rc, sync::Arc};
 
-use nalgebra::{Matrix4, Perspective3};
+use nalgebra::{Matrix4, Perspective3, Point3};
 use winit::window::Window;
 
 use super::{
     camera::Camera,
     geometry::Geometry,
-    materials::{LineMaterial, Material, MaterialType},
+    materials::{LineMaterial, Material, MaterialType, ParticleMaterial},
+    texture::Texture,
 };
 
 pub struct RenderRequest {
     pub material_type: MaterialType,
-    pub geometry: Rc<Geometry>
+    pub geometry: Geometry,
+}
+
+#[repr(C)]
+struct CameraUniform {
+    pub view_proj: Matrix4<f32>,
+    pub view_inv: Matrix4<f32>,
+    pub position: Point3<f32>,
+    pub _padding: f32,
 }
 
 pub struct RenderEngine {
@@ -21,13 +30,14 @@ pub struct RenderEngine {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
 
+    depth_texture: Texture,
     camera: Camera,
 
-    view_projection_buffer: wgpu::Buffer,
-    view_projection_bind_group: wgpu::BindGroup,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
 
     materials: HashMap<MaterialType, Box<dyn Material>>,
-    render_queue: Vec<RenderRequest>
+    render_queue: Vec<RenderRequest>,
 }
 
 impl RenderEngine {
@@ -81,22 +91,23 @@ impl RenderEngine {
         };
 
         surface.configure(&device, &config);
+        let depth_texture = Texture::depth_texture(&device, &config);
 
         // Model view buffer initialization
 
-        let view_projection_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("MVP buffer"),
-            size: std::mem::size_of::<Matrix4<f32>>() as u64,
+        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Camera buffer"),
+            size: std::mem::size_of::<CameraUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let model_view_bind_group_layout =
+        let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Model view bind group layout"),
+                label: Some("Camera bind group layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -106,12 +117,12 @@ impl RenderEngine {
                 }],
             });
 
-        let view_projection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera bind group"),
-            layout: &model_view_bind_group_layout,
+            layout: &camera_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: view_projection_buffer.as_entire_binding(),
+                resource: camera_buffer.as_entire_binding(),
             }],
         });
 
@@ -122,7 +133,15 @@ impl RenderEngine {
             MaterialType::Line,
             Box::new(LineMaterial::new(
                 &device,
-                &model_view_bind_group_layout,
+                &camera_bind_group_layout,
+                config.format,
+            )),
+        );
+        materials.insert(
+            MaterialType::Particle,
+            Box::new(ParticleMaterial::new(
+                &device,
+                &camera_bind_group_layout,
                 config.format,
             )),
         );
@@ -137,16 +156,41 @@ impl RenderEngine {
             queue,
             config,
             size,
+            depth_texture,
             camera,
-            view_projection_buffer,
-            view_projection_bind_group,
+            camera_buffer,
+            camera_bind_group,
             materials,
-            render_queue: Vec::new()
+            render_queue: Vec::new(),
         })
     }
 
-    pub fn create_geometry<T>(&self, vertices: &[T]) -> Geometry {
-        Geometry::new(&self.device, &self.queue, vertices)
+    pub fn create_geometry_array<T>(&self, vertices: &[T]) -> Geometry {
+        Geometry::Array {
+            vertex_buffer: self.create_buffer(vertices),
+            vertex_cnt: vertices.len(),
+        }
+    }
+
+    pub fn create_buffer<T>(&self, data: &[T]) -> Rc<wgpu::Buffer> {
+        let len = data.len() * std::mem::size_of::<T>();
+        let ptr = data.as_ptr() as *const u8;
+
+        let data = unsafe { std::slice::from_raw_parts(ptr, len) };
+
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Geometry buffer"),
+            size: len as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let view = self
+            .queue
+            .write_buffer_with(&buffer, 0, NonZero::new(len as u64).unwrap());
+        view.unwrap().copy_from_slice(data);
+
+        Rc::new(buffer)
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -155,6 +199,7 @@ impl RenderEngine {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            self.depth_texture = Texture::depth_texture(&self.device, &self.config);
         }
     }
 
@@ -180,14 +225,20 @@ impl RenderEngine {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mvp = self.get_projection_matrix() * self.camera.get_view_matrix();
-        let len = std::mem::size_of::<Matrix4<f32>>();
-        let ptr = mvp.as_ptr() as *const u8;
+        let view_mat = self.camera.get_view_matrix();
 
+        let camera_data = CameraUniform {
+            view_proj: self.get_projection_matrix() * view_mat,
+            view_inv: view_mat.try_inverse().unwrap(),
+            position: self.camera.position,
+            _padding: 0.0,
+        };
+
+        let len = std::mem::size_of::<CameraUniform>();
+        let ptr = camera_data.view_proj.as_ptr() as *const u8;
         let data = unsafe { std::slice::from_raw_parts(ptr, len) };
 
-        self.queue
-            .write_buffer(&self.view_projection_buffer, 0, data);
+        self.queue.write_buffer(&self.camera_buffer, 0, data);
 
         let mut encoder = self
             .device
@@ -206,17 +257,44 @@ impl RenderEngine {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: self.depth_texture.view(),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
 
-            render_pass.set_bind_group(0, &self.view_projection_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
             for request in &self.render_queue {
                 let material = self.materials.get(&request.material_type).unwrap();
                 material.bind_pipeline(&mut render_pass);
-                material.draw(&request.geometry, &mut render_pass);
+
+                match &request.geometry {
+                    Geometry::Array {
+                        vertex_buffer,
+                        vertex_cnt,
+                    } => {
+                        material.draw_geometry_array(&vertex_buffer, *vertex_cnt, &mut render_pass)
+                    }
+                    Geometry::Instanced {
+                        vertex_cnt,
+                        instance_buffer,
+                        instance_cnt,
+                    } => {
+                        material.draw_instanced(
+                            *vertex_cnt,
+                            &instance_buffer,
+                            *instance_cnt,
+                            &mut render_pass,
+                        );
+                    }
+                }
             }
 
             self.render_queue.clear();

@@ -33,7 +33,7 @@ impl ApplicationHandler for Application {
             let window_arc = Arc::new(window);
 
             if let Ok(render_engine) = RenderEngine::new(window_arc.clone()).block_on() {
-                self.fluid_sim = Some(FluidSimulation::new(&render_engine));
+                self.fluid_sim = Some(FluidSimulation::new(1000, &render_engine));
                 self.render_engine = Some(render_engine);
             } else {
                 self.render_engine = None;
