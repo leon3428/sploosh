@@ -1,10 +1,13 @@
-use nalgebra::{Matrix4, Point3, UnitQuaternion, Vector3};
+use core::f32;
+
+use nalgebra::{Matrix4, Point3, Vector3};
 
 pub struct Camera {
-    position: Point3<f32>,
+    pub position: Point3<f32>,
     target: Point3<f32>,
     radius: f32,
-    rotation: UnitQuaternion<f32>,
+    phi: f32,
+    theta: f32,
     pub z_near: f32,
     pub z_far: f32,
     pub fov: f32,
@@ -16,7 +19,8 @@ impl Camera {
             position: Point3::new(0.0, 0.0, -1.0),
             target: Point3::origin(),
             radius: 1.0,
-            rotation: UnitQuaternion::identity(),
+            phi: 0.0,
+            theta: f32::consts::FRAC_2_PI,
             z_near: 0.1,
             z_far: 100.0,
             fov: std::f32::consts::FRAC_PI_4,
@@ -24,32 +28,28 @@ impl Camera {
     }
 
     fn update_position(&mut self) {
-        let direction = self.rotation * Vector3::new(0.0, 0.0, -1.0);
-        self.position = self.target + direction * self.radius;
+        self.position.x = self.radius * self.theta.sin() * self.phi.cos();
+        self.position.y = self.radius * self.theta.cos();
+        self.position.z = self.radius * self.theta.sin() * self.phi.sin();
     }
 
     pub fn update(
         &mut self,
-        right_button_pressed: bool,
+        left_button_pressed: bool,
         mouse_move_delta: (f32, f32),
         mouse_wheel_delta: f32,
     ) {
-        let sensitivity = 0.01;
+        let sensitivity = 0.003;
         let zoom_speed = 0.001;
 
         self.radius += mouse_wheel_delta * zoom_speed;
         self.radius = f32::max(self.radius, self.z_near);
 
-        if right_button_pressed {
-            let yaw_rotation = UnitQuaternion::from_axis_angle(
-                &Vector3::y_axis(),
-                -mouse_move_delta.0 * sensitivity,
-            );
-            let pitch_axis = self.rotation * Vector3::x_axis();
-            let pitch_rotation =
-                UnitQuaternion::from_axis_angle(&pitch_axis, mouse_move_delta.1 * sensitivity);
+        if left_button_pressed {
+            self.phi += mouse_move_delta.0 * sensitivity;
+            self.theta -= mouse_move_delta.1 * sensitivity;
 
-            self.rotation = yaw_rotation * pitch_rotation * self.rotation;
+            self.theta = self.theta.clamp(0.01, f32::consts::PI - 0.01);
         }
 
         self.update_position();
