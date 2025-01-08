@@ -7,12 +7,11 @@ use winit::{
     window::Window,
 };
 
-use crate::{fluid_simulation::FluidSimulation, graphics::render_engine::RenderEngine, input_helper::InputHelper};
+use crate::{input_helper::InputHelper, ApplicationState};
 
 pub struct Application {
     window: Option<Arc<Window>>,
-    render_engine: Option<RenderEngine>,
-    fluid_sim: Option<FluidSimulation>,
+    state: Option<ApplicationState>,
     input_helper: InputHelper,
 }
 
@@ -20,8 +19,7 @@ impl Application {
     pub fn new() -> Self {
         Self {
             window: None,
-            render_engine: None,
-            fluid_sim: None,
+            state: None,
             input_helper: InputHelper::new(),
         }
     }
@@ -32,13 +30,7 @@ impl ApplicationHandler for Application {
         if let Ok(window) = event_loop.create_window(Window::default_attributes()) {
             let window_arc = Arc::new(window);
 
-            if let Ok(render_engine) = RenderEngine::new(window_arc.clone()).block_on() {
-                self.fluid_sim = Some(FluidSimulation::new(1000, &render_engine));
-                self.render_engine = Some(render_engine);
-            } else {
-                self.render_engine = None;
-            }
-
+            self.state = ApplicationState::new(window_arc.clone()).block_on().ok();
             self.window = Some(window_arc);
         }
     }
@@ -51,14 +43,14 @@ impl ApplicationHandler for Application {
     ) {
         if let Some(window) = self.window.as_ref() {
             if window.id() == window_id {
-                let render_engine = self.render_engine.as_mut().unwrap();
-
                 match event {
                     WindowEvent::CloseRequested => {
                         event_loop.exit();
                     }
                     WindowEvent::Resized(physical_size) => {
-                        render_engine.resize(physical_size);
+                        if let Some(state) = &mut self.state {
+                            state.resize(physical_size);
+                        }
                     }
                     WindowEvent::KeyboardInput {
                         device_id: _,
@@ -75,17 +67,10 @@ impl ApplicationHandler for Application {
                         self.input_helper.mouse_key_event(&state, button);
                     }
                     WindowEvent::RedrawRequested => {
-                        render_engine.update_camera(
-                            self.input_helper
-                                .is_mouse_button_pressed(winit::event::MouseButton::Left),
-                            self.input_helper.mouse_delta(),
-                            self.input_helper.mouse_wheel_delta(),
-                        );
-
-                        self.fluid_sim.as_mut().unwrap().update(render_engine);
-
-                        render_engine.render().expect("Render engine failed");
-
+                        if let Some(state) = &mut self.state {
+                            state.update(&self.input_helper);
+                            state.redraw();
+                        }
                         self.input_helper.reset();
                     }
                     _ => {}
