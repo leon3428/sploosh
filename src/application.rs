@@ -42,6 +42,10 @@ impl ApplicationHandler for Application {
         event: winit::event::WindowEvent,
     ) {
         if let Some(window) = self.window.as_ref() {
+            if let Some(state) = &mut self.state {
+                state.on_window_event(&event);
+            }
+
             if window.id() == window_id {
                 match event {
                     WindowEvent::CloseRequested => {

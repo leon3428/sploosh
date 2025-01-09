@@ -1,5 +1,7 @@
-use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, time::Instant};
 
+use egui::{ClippedPrimitive, TexturesDelta};
+use egui_wgpu::Renderer;
 use nalgebra::{Matrix4, Point3};
 
 use crate::RenderDevice;
@@ -15,6 +17,12 @@ pub struct RenderRequest {
     pub geometry: Geometry,
 }
 
+pub struct GuiRenderRequest {
+    pub textures_delta: TexturesDelta,
+    pub tris: Vec<ClippedPrimitive>,
+    pub scale_factor: f32,
+}
+
 #[repr(C)]
 struct CameraUniform {
     pub view_proj: Matrix4<f32>,
@@ -25,12 +33,16 @@ struct CameraUniform {
 
 pub struct RenderEngine {
     render_device: Rc<RefCell<RenderDevice>>,
+    gui_renderer: Renderer,
 
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
 
     materials: HashMap<MaterialType, Box<dyn Material>>,
     render_queue: Vec<RenderRequest>,
+    gui_request: Option<GuiRenderRequest>,
+
+    last_frame_time: f32,
 }
 
 impl<'a> RenderEngine {
@@ -83,14 +95,26 @@ impl<'a> RenderEngine {
             Box::new(ParticleMaterial::new(&rd, &camera_bind_group_layout)),
         );
 
+        // gui
+        let gui_renderer = Renderer::new(
+            &rd.device,
+            rd.config.format,
+            Some(rd.depth_texture.format()),
+            1,
+            true,
+        );
+
         drop(rd);
 
         Self {
             render_device,
+            gui_renderer,
             camera_buffer,
             camera_bind_group,
             materials,
             render_queue: Vec::new(),
+            gui_request: None,
+            last_frame_time: 0.0
         }
     }
 
@@ -130,7 +154,13 @@ impl<'a> RenderEngine {
         self.render_queue.push(render_request);
     }
 
+    pub fn submit_gui_render_request(&mut self, request: GuiRenderRequest) {
+        self.gui_request = Some(request);
+    }
+
     pub fn render(&mut self, camera: &Camera) -> Result<(), wgpu::SurfaceError> {
+        let start_time = Instant::now();
+
         let rd = self.render_device.borrow();
         let output = rd.surface.get_current_texture()?;
         let view = output
@@ -214,9 +244,67 @@ impl<'a> RenderEngine {
             self.render_queue.clear();
         }
 
+        if let Some(request) = self.gui_request.take() {
+            for (id, image_delta) in &request.textures_delta.set {
+                self.gui_renderer
+                    .update_texture(&rd.device, &rd.queue, *id, image_delta);
+            }
+
+            let screen_descriptor = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [rd.config.width, rd.config.height],
+                pixels_per_point: request.scale_factor,
+            };
+
+            self.gui_renderer.update_buffers(
+                &rd.device,
+                &rd.queue,
+                &mut encoder,
+                &request.tris,
+                &screen_descriptor,
+            );
+
+            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Gui render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: rd.depth_texture.view(),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            self.gui_renderer.render(
+                &mut render_pass.forget_lifetime(),
+                &request.tris,
+                &screen_descriptor,
+            );
+            for x in &request.textures_delta.free {
+                self.gui_renderer.free_texture(x);
+            }
+        }
+
         rd.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
+        let end_time = Instant::now();
+        self.last_frame_time = (end_time - start_time).as_secs_f32() * 1000.0;
+
         Ok(())
+    }
+    
+    pub fn last_frame_time(&self) -> f32 {
+        self.last_frame_time
     }
 }
