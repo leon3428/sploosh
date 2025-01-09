@@ -2,10 +2,13 @@ pub struct Texture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     sampler: wgpu::Sampler,
+    format: wgpu::TextureFormat,
 }
 
 impl Texture {
     pub fn depth_texture(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+        let format = wgpu::TextureFormat::Depth32Float;
+
         let size = wgpu::Extent3d {
             width: config.width.max(1),
             height: config.height.max(1),
@@ -18,7 +21,7 @@ impl Texture {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         };
@@ -43,6 +46,7 @@ impl Texture {
             texture,
             view,
             sampler,
+            format
         }
     }
     
@@ -56,5 +60,9 @@ impl Texture {
     
     pub fn texture(&self) -> &wgpu::Texture {
         &self.texture
+    }
+    
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
     }
 }
