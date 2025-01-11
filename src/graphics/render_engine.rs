@@ -114,38 +114,18 @@ impl<'a> RenderEngine {
             materials,
             render_queue: Vec::new(),
             gui_request: None,
-            last_frame_time: 0.0
+            last_frame_time: 0.0,
         }
     }
 
     pub fn create_geometry_array<T>(&self, vertices: &[T]) -> Geometry {
         Geometry::Array {
-            vertex_buffer: self.create_buffer(vertices),
+            vertex_buffer: self.render_device.borrow().create_buffer_init(
+                vertices,
+                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            ),
             vertex_cnt: vertices.len(),
         }
-    }
-
-    pub fn create_buffer<T>(&self, data: &[T]) -> Rc<wgpu::Buffer> {
-        let rd = self.render_device.borrow();
-
-        let len = data.len() * std::mem::size_of::<T>();
-        let ptr = data.as_ptr() as *const u8;
-
-        let data = unsafe { std::slice::from_raw_parts(ptr, len) };
-
-        let buffer = rd.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Geometry buffer"),
-            size: len as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let view = rd
-            .queue
-            .write_buffer_with(&buffer, 0, NonZero::new(len as u64).unwrap());
-        view.unwrap().copy_from_slice(data);
-
-        Rc::new(buffer)
     }
 
     pub fn update(&self) {}
@@ -303,7 +283,7 @@ impl<'a> RenderEngine {
 
         Ok(())
     }
-    
+
     pub fn last_frame_time(&self) -> f32 {
         self.last_frame_time
     }

@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, num::NonZero, rc::Rc, sync::Arc};
 
 use winit::window::Window;
 
@@ -81,5 +81,26 @@ impl RenderDevice {
             self.surface.configure(&self.device, &self.config);
             self.depth_texture = Texture::depth_texture(&self.device, &self.config);
         }
+    }
+
+    pub fn create_buffer_init<T>(&self, data: &[T], usage: wgpu::BufferUsages) -> Rc<wgpu::Buffer> {
+        let len = data.len() * std::mem::size_of::<T>();
+        let ptr = data.as_ptr() as *const u8;
+
+        let data = unsafe { std::slice::from_raw_parts(ptr, len) };
+
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Geometry buffer"),
+            size: len as u64,
+            usage,
+            mapped_at_creation: false,
+        });
+
+        let view = self
+            .queue
+            .write_buffer_with(&buffer, 0, NonZero::new(len as u64).unwrap());
+        view.unwrap().copy_from_slice(data);
+
+        Rc::new(buffer)
     }
 }

@@ -2,10 +2,13 @@ use std::rc::Rc;
 
 use nalgebra::{Point3, Vector3};
 
-use crate::graphics::{
-    geometry::Geometry,
-    materials::MaterialType,
-    render_engine::{RenderEngine, RenderRequest},
+use crate::{
+    graphics::{
+        geometry::Geometry,
+        materials::MaterialType,
+        render_engine::{RenderEngine, RenderRequest},
+    },
+    RenderDevice,
 };
 
 pub struct FluidSimulation {
@@ -16,17 +19,46 @@ pub struct FluidSimulation {
     bbox_geometry: Geometry,
     position_buffer: Rc<wgpu::Buffer>,
     velocity_buffer: Rc<wgpu::Buffer>,
+
+    spatial_lookup_keys: wgpu::Buffer,
+    spatial_lookup_vals: wgpu::Buffer,
 }
 
 impl FluidSimulation {
-    pub fn new(particle_cnt: usize, render_engine: &RenderEngine) -> Self {
+    pub fn new(
+        particle_cnt: usize,
+        smoothing_radius: f32,
+        render_engine: &RenderEngine,
+        render_device: &RenderDevice,
+    ) -> Self {
         let bbox_dimensions = Vector3::new(1.0, 0.8, 0.8);
         let bbox_geometry = render_engine
             .create_geometry_array(&FluidSimulation::create_bbox_geometry(&bbox_dimensions));
-
-        let smoothing_radius = 0.04;
-
         let positions = FluidSimulation::particle_start_positions(particle_cnt, smoothing_radius);
+
+        let spatial_lookup_keys = render_device.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Spatial lookup keys"),
+            size: (particle_cnt * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        let spatial_lookup_vals = render_device.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Spatial lookup keys"),
+            size: (particle_cnt * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        let position_buffer = render_device.create_buffer_init(
+            &positions,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+        );
+
+        let velocity_buffer = render_device.create_buffer_init(
+            &positions,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+        );
 
         Self {
             particle_cnt,
@@ -34,8 +66,10 @@ impl FluidSimulation {
             bbox_dimensions,
 
             bbox_geometry,
-            position_buffer: render_engine.create_buffer(&positions),
-            velocity_buffer: render_engine.create_buffer(&positions),
+            position_buffer,
+            velocity_buffer,
+            spatial_lookup_keys,
+            spatial_lookup_vals,
         }
     }
 
@@ -107,6 +141,68 @@ impl FluidSimulation {
 
         positions
     }
+
+    fn compute_pipeline(render_device: &RenderDevice) -> wgpu::ComputePipeline {
+        let bind_group_layout = render_device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Spatial lookup compute bind group layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let layout = render_device.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Spatial lookup compute pipeline layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+    
+        let shader = render_device.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Spatial lookup compute shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fill_spatial_lookup.wgsl").into()),
+        });
+    
+        let pipeline = render_device.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Spatial lookup compute pipeline"),
+            layout: Some(&layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        pipeline
+    }
+
+    fn update_spatial_lookup() {}
 
     pub fn update(&self, render_engine: &mut RenderEngine) {
         render_engine.submit_render_request(RenderRequest {
