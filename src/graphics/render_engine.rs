@@ -1,10 +1,10 @@
-use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
 
 use egui::{ClippedPrimitive, TexturesDelta};
 use egui_wgpu::Renderer;
 use nalgebra::{Matrix4, Point3};
 
-use crate::RenderDevice;
+use crate::{ComputeTask, RenderDevice};
 
 use super::{
     camera::Camera,
@@ -21,6 +21,10 @@ pub struct GuiRenderRequest {
     pub textures_delta: TexturesDelta,
     pub tris: Vec<ClippedPrimitive>,
     pub scale_factor: f32,
+}
+
+pub struct ComputeRequest {
+    pub compute_task: Rc<ComputeTask>,
 }
 
 #[repr(C)]
@@ -41,6 +45,7 @@ pub struct RenderEngine {
     materials: HashMap<MaterialType, Box<dyn Material>>,
     render_queue: Vec<RenderRequest>,
     gui_request: Option<GuiRenderRequest>,
+    compute_queue: Vec<ComputeRequest>,
 
     last_frame_time: f32,
 }
@@ -113,6 +118,7 @@ impl<'a> RenderEngine {
             camera_bind_group,
             materials,
             render_queue: Vec::new(),
+            compute_queue: Vec::new(),
             gui_request: None,
             last_frame_time: 0.0,
         }
@@ -136,6 +142,10 @@ impl<'a> RenderEngine {
 
     pub fn submit_gui_render_request(&mut self, request: GuiRenderRequest) {
         self.gui_request = Some(request);
+    }
+
+    pub fn submit_compute_request(&mut self, request: ComputeRequest) {
+        self.compute_queue.push(request);
     }
 
     pub fn render(&mut self, camera: &Camera) -> Result<(), wgpu::SurfaceError> {
@@ -169,6 +179,19 @@ impl<'a> RenderEngine {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute pass"),
+                timestamp_writes: None,
+            });
+
+            for request in &self.compute_queue {
+                request.compute_task.execute(&mut compute_pass);
+            }
+
+            self.compute_queue.clear();
+        }
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

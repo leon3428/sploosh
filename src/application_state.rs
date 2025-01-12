@@ -29,7 +29,7 @@ impl ApplicationState {
     pub async fn new(window: Arc<Window>) -> Result<Self, Box<dyn Error>> {
         let render_device = Rc::new(RefCell::new(RenderDevice::new(window.clone()).await?));
         let render_engine = RenderEngine::new(render_device.clone());
-        let fluid_sim = FluidSimulation::new(900, &render_engine);
+        let fluid_sim = FluidSimulation::new(900, 0.04, &render_engine, &render_device.borrow());
         let gui = Egui::new(&window);
 
         Ok(Self {
