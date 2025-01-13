@@ -1,4 +1,4 @@
-use crate::RenderDevice;
+use crate::WgpuRenderDevice;
 
 pub trait Material {
     fn material_type(&self) -> MaterialType;
@@ -30,11 +30,11 @@ pub struct LineMaterial {
 
 impl LineMaterial {
     pub fn new(
-        render_device: &RenderDevice,
+        render_device: &WgpuRenderDevice,
         model_view_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let shader = render_device
-            .device
+            .device()
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Line Shader"),
                 source: wgpu::ShaderSource::Wgsl(
@@ -44,7 +44,7 @@ impl LineMaterial {
 
         let render_pipeline_layout =
             render_device
-                .device
+                .device()
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Line render pipeline layout"),
                     bind_group_layouts: &[&model_view_bind_group_layout],
@@ -53,7 +53,7 @@ impl LineMaterial {
 
         let pipeline =
             render_device
-                .device
+                .device()
                 .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("Line render pipeline"),
                     layout: Some(&render_pipeline_layout),
@@ -143,11 +143,11 @@ pub struct ParticleMaterial {
 
 impl ParticleMaterial {
     pub fn new(
-        render_device: &RenderDevice,
+        render_device: &WgpuRenderDevice,
         model_view_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let shader = render_device
-            .device
+            .device()
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Particle Shader"),
                 source: wgpu::ShaderSource::Wgsl(
@@ -157,7 +157,7 @@ impl ParticleMaterial {
 
         let render_pipeline_layout =
             render_device
-                .device
+                .device()
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Particle render pipeline layout"),
                     bind_group_layouts: &[&model_view_bind_group_layout],
@@ -166,7 +166,7 @@ impl ParticleMaterial {
 
         let pipeline =
             render_device
-                .device
+                .device()
                 .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("Particle render pipeline"),
                     layout: Some(&render_pipeline_layout),
@@ -174,10 +174,10 @@ impl ParticleMaterial {
                         module: &shader,
                         entry_point: Some("vs_main"),
                         buffers: &[wgpu::VertexBufferLayout {
-                            array_stride: std::mem::size_of::<nalgebra::Point3<f32>>()
+                            array_stride: std::mem::size_of::<nalgebra::Point4<f32>>()
                                 as wgpu::BufferAddress,
                             step_mode: wgpu::VertexStepMode::Instance,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                            attributes: &wgpu::vertex_attr_array![0 => Float32x4],
                         }],
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                     },

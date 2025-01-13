@@ -3,7 +3,7 @@
 @group(0) @binding(2) var<storage, read_write> spatial_lookup_vals: array<u32>;
 
 fn cell_key(cell: vec3<u32>) -> u32 {
-    return cell.x + cell.y * CELL_CNT.x + cell.z * CELL_CNT.x * CELL_CNT.y; 
+    return cell.z + cell.y * CELL_CNT.z + cell.x * CELL_CNT.y * CELL_CNT.z;
 }
 
 @compute @workgroup_size(64)

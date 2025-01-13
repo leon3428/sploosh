@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::RenderDevice;
+use crate::WgpuDevice;
 
 pub struct ComputeTask {
     bind_group: wgpu::BindGroup,
@@ -10,7 +10,7 @@ pub struct ComputeTask {
 
 impl ComputeTask {
     pub fn new(
-        render_device: &RenderDevice,
+        wgpu_device: &WgpuDevice,
         name: &str,
         entries: &[wgpu::BindGroupLayoutEntry],
         resources: &[wgpu::BindGroupEntry],
@@ -18,14 +18,14 @@ impl ComputeTask {
         workgroups: (u32, u32, u32),
     ) -> Self {
         let bind_group_layout =
-            render_device
+            wgpu_device
                 .device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some(&format!("{name} bind group layout")),
                     entries,
                 });
 
-        let bind_group = render_device
+        let bind_group = wgpu_device
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("{name} bind group")),
@@ -33,7 +33,7 @@ impl ComputeTask {
                 entries: resources,
             });
 
-        let layout = render_device
+        let layout = wgpu_device
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(&format!("{name} pipeline layout")),
@@ -41,7 +41,7 @@ impl ComputeTask {
                 push_constant_ranges: &[],
             });
 
-        let shader = render_device
+        let shader = wgpu_device
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(&format!("{name} shader")),
@@ -49,7 +49,7 @@ impl ComputeTask {
             });
 
         let pipeline =
-            render_device
+            wgpu_device
                 .device
                 .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(&format!("{name} pipeline")),

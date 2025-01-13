@@ -4,7 +4,7 @@ use egui::{ClippedPrimitive, TexturesDelta};
 use egui_wgpu::Renderer;
 use nalgebra::{Matrix4, Point3};
 
-use crate::{ComputeTask, RenderDevice};
+use crate::{ComputeTask, WgpuRenderDevice};
 
 use super::{
     camera::Camera,
@@ -36,7 +36,7 @@ struct CameraUniform {
 }
 
 pub struct RenderEngine {
-    render_device: Rc<RefCell<RenderDevice>>,
+    render_device: Rc<RefCell<WgpuRenderDevice>>,
     gui_renderer: Renderer,
 
     camera_buffer: wgpu::Buffer,
@@ -51,12 +51,12 @@ pub struct RenderEngine {
 }
 
 impl<'a> RenderEngine {
-    pub fn new(render_device: Rc<RefCell<RenderDevice>>) -> Self {
+    pub fn new(render_device: Rc<RefCell<WgpuRenderDevice>>) -> Self {
         let rd = render_device.borrow();
 
         // Model view buffer initialization
 
-        let camera_buffer = rd.device.create_buffer(&wgpu::BufferDescriptor {
+        let camera_buffer = rd.device().create_buffer(&wgpu::BufferDescriptor {
             label: Some("Camera buffer"),
             size: std::mem::size_of::<CameraUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -64,7 +64,7 @@ impl<'a> RenderEngine {
         });
 
         let camera_bind_group_layout =
-            rd.device
+            rd.device()
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("Camera bind group layout"),
                     entries: &[wgpu::BindGroupLayoutEntry {
@@ -79,7 +79,7 @@ impl<'a> RenderEngine {
                     }],
                 });
 
-        let camera_bind_group = rd.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let camera_bind_group = rd.device().create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera bind group"),
             layout: &camera_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
@@ -102,7 +102,7 @@ impl<'a> RenderEngine {
 
         // gui
         let gui_renderer = Renderer::new(
-            &rd.device,
+            &rd.device(),
             rd.config.format,
             Some(rd.depth_texture.format()),
             1,
@@ -172,10 +172,10 @@ impl<'a> RenderEngine {
         let ptr = camera_data.view_proj.as_ptr() as *const u8;
         let data = unsafe { std::slice::from_raw_parts(ptr, len) };
 
-        rd.queue.write_buffer(&self.camera_buffer, 0, data);
+        rd.queue().write_buffer(&self.camera_buffer, 0, data);
 
         let mut encoder = rd
-            .device
+            .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
@@ -250,7 +250,7 @@ impl<'a> RenderEngine {
         if let Some(request) = self.gui_request.take() {
             for (id, image_delta) in &request.textures_delta.set {
                 self.gui_renderer
-                    .update_texture(&rd.device, &rd.queue, *id, image_delta);
+                    .update_texture(&rd.device(), &rd.queue(), *id, image_delta);
             }
 
             let screen_descriptor = egui_wgpu::ScreenDescriptor {
@@ -259,8 +259,8 @@ impl<'a> RenderEngine {
             };
 
             self.gui_renderer.update_buffers(
-                &rd.device,
-                &rd.queue,
+                &rd.device(),
+                &rd.queue(),
                 &mut encoder,
                 &request.tris,
                 &screen_descriptor,
@@ -298,7 +298,7 @@ impl<'a> RenderEngine {
             }
         }
 
-        rd.queue.submit(std::iter::once(encoder.finish()));
+        rd.queue().submit(std::iter::once(encoder.finish()));
         output.present();
 
         let end_time = Instant::now();

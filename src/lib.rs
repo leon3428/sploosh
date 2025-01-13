@@ -7,12 +7,14 @@ pub mod graphics;
 pub mod input_helper;
 pub mod fluid_simulation;
 pub mod gui;
-pub mod render_device;
+pub mod wgpu_render_device;
 pub mod application_state;
 pub mod camera_controller;
 pub mod compute_task;
+pub mod wgpu_device;
 
-pub use render_device::RenderDevice;
+pub use wgpu_render_device::WgpuRenderDevice;
+pub use wgpu_device::WgpuDevice;
 pub use fluid_simulation::FluidSimulation;
 pub use application_state::ApplicationState;
 pub use camera_controller::CameraController;

@@ -8,12 +8,12 @@ use crate::{
     graphics::{Camera, RenderEngine},
     gui::Egui,
     input_helper::InputHelper,
-    CameraController, FluidSimulation, RenderDevice,
+    CameraController, FluidSimulation, WgpuRenderDevice,
 };
 
 pub struct ApplicationState {
     window: Arc<Window>,
-    render_device: Rc<RefCell<RenderDevice>>,
+    render_device: Rc<RefCell<WgpuRenderDevice>>,
     render_engine: RenderEngine,
     gui: Egui,
     camera: Camera,
@@ -27,9 +27,9 @@ pub struct ApplicationState {
 
 impl ApplicationState {
     pub async fn new(window: Arc<Window>) -> Result<Self, Box<dyn Error>> {
-        let render_device = Rc::new(RefCell::new(RenderDevice::new(window.clone()).await?));
+        let render_device = Rc::new(RefCell::new(WgpuRenderDevice::new(window.clone()).await?));
         let render_engine = RenderEngine::new(render_device.clone());
-        let fluid_sim = FluidSimulation::new(900, 0.04, &render_engine, &render_device.borrow());
+        let fluid_sim = FluidSimulation::new(900, 0.04, &render_engine, &render_device.borrow().wgpu_device);
         let gui = Egui::new(&window);
 
         Ok(Self {

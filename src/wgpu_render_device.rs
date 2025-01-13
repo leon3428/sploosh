@@ -1,18 +1,17 @@
-use std::{error::Error, num::NonZero, rc::Rc, sync::Arc};
+use std::{error::Error, rc::Rc, sync::Arc};
 
 use winit::window::Window;
 
-use crate::graphics::texture::Texture;
+use crate::{graphics::texture::Texture, WgpuDevice};
 
-pub struct RenderDevice {
+pub struct WgpuRenderDevice {
     pub surface: wgpu::Surface<'static>,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
+    pub wgpu_device: WgpuDevice,
     pub config: wgpu::SurfaceConfiguration,
     pub depth_texture: Texture,
 }
 
-impl RenderDevice {
+impl WgpuRenderDevice {
     pub async fn new(window: Arc<Window>) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -67,40 +66,30 @@ impl RenderDevice {
 
         Ok(Self {
             surface,
-            device,
-            queue,
+            wgpu_device: WgpuDevice { device, queue },
             config,
             depth_texture,
         })
+    }
+
+    pub fn device(&self) -> &wgpu::Device {
+        &self.wgpu_device.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.wgpu_device.queue
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
-            self.depth_texture = Texture::depth_texture(&self.device, &self.config);
+            self.surface.configure(self.device(), &self.config);
+            self.depth_texture = Texture::depth_texture(self.device(), &self.config);
         }
     }
 
     pub fn create_buffer_init<T>(&self, data: &[T], usage: wgpu::BufferUsages) -> Rc<wgpu::Buffer> {
-        let len = data.len() * std::mem::size_of::<T>();
-        let ptr = data.as_ptr() as *const u8;
-
-        let data = unsafe { std::slice::from_raw_parts(ptr, len) };
-
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Geometry buffer"),
-            size: len as u64,
-            usage,
-            mapped_at_creation: false,
-        });
-
-        let view = self
-            .queue
-            .write_buffer_with(&buffer, 0, NonZero::new(len as u64).unwrap());
-        view.unwrap().copy_from_slice(data);
-
-        Rc::new(buffer)
+        self.wgpu_device.create_buffer_init(data, usage)
     }
 }

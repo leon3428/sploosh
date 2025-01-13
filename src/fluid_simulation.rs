@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point4, Vector3};
 
 use crate::{
     graphics::{
@@ -8,7 +8,7 @@ use crate::{
         materials::MaterialType,
         render_engine::{ComputeRequest, RenderEngine, RenderRequest},
     },
-    ComputeTask, RenderDevice,
+    ComputeTask, WgpuDevice,
 };
 
 pub struct FluidSimulation {
@@ -31,14 +31,14 @@ impl FluidSimulation {
         particle_cnt: usize,
         smoothing_radius: f32,
         render_engine: &RenderEngine,
-        render_device: &RenderDevice,
+        wgpu_device: &WgpuDevice,
     ) -> Self {
         let bbox_dimensions = Vector3::new(1.0, 0.8, 0.8);
         let bbox_geometry = render_engine
             .create_geometry_array(&FluidSimulation::create_bbox_geometry(&bbox_dimensions));
 
         let (position_buffer, velocity_buffer, spatial_lookup_keys, spatial_lookup_vals) =
-            FluidSimulation::create_buffers(particle_cnt, smoothing_radius, render_device);
+            FluidSimulation::create_buffers(particle_cnt, smoothing_radius, wgpu_device);
         let spatial_lookup_task = FluidSimulation::create_spatial_lookup_task(
             particle_cnt,
             smoothing_radius,
@@ -46,7 +46,7 @@ impl FluidSimulation {
             &position_buffer,
             &spatial_lookup_keys,
             &spatial_lookup_vals,
-            render_device,
+            wgpu_device,
         );
 
         Self {
@@ -67,7 +67,7 @@ impl FluidSimulation {
     fn create_buffers(
         particle_cnt: usize,
         smoothing_radius: f32,
-        render_device: &RenderDevice,
+        wgpu_device: &WgpuDevice,
     ) -> (
         Rc<wgpu::Buffer>,
         Rc<wgpu::Buffer>,
@@ -76,24 +76,24 @@ impl FluidSimulation {
     ) {
         let positions = FluidSimulation::particle_start_positions(particle_cnt, smoothing_radius);
 
-        let position_buffer = render_device.create_buffer_init(
+        let position_buffer = wgpu_device.create_buffer_init(
             &positions,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
         );
 
-        let velocity_buffer = render_device.create_buffer_init(
+        let velocity_buffer = wgpu_device.create_buffer_init(
             &positions,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
         );
 
-        let spatial_lookup_keys = render_device.device.create_buffer(&wgpu::BufferDescriptor {
+        let spatial_lookup_keys = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Spatial lookup keys"),
             size: (particle_cnt * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
 
-        let spatial_lookup_vals = render_device.device.create_buffer(&wgpu::BufferDescriptor {
+        let spatial_lookup_vals = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Spatial lookup keys"),
             size: (particle_cnt * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
@@ -115,7 +115,7 @@ impl FluidSimulation {
         position_buffer: &wgpu::Buffer,
         spatial_lookup_keys: &wgpu::Buffer,
         spatial_lookup_vals: &wgpu::Buffer,
-        render_device: &RenderDevice,
+        wgpu_device: &WgpuDevice,
     ) -> Rc<ComputeTask> {
         let cell_cnt_x = (bbox_dimensions.x / smoothing_radius).ceil();
         let cell_cnt_y = (bbox_dimensions.y / smoothing_radius).ceil();
@@ -130,7 +130,7 @@ impl FluidSimulation {
         );
 
         let spatial_lookup_task = Rc::new(ComputeTask::new(
-            render_device,
+            wgpu_device,
             "Spatial lookup",
             &[
                 wgpu::BindGroupLayoutEntry {
@@ -226,7 +226,7 @@ impl FluidSimulation {
         ]
     }
 
-    fn particle_start_positions(particle_cnt: usize, smoothing_radius: f32) -> Vec<Point3<f32>> {
+    fn particle_start_positions(particle_cnt: usize, smoothing_radius: f32) -> Vec<Point4<f32>> {
         let mut positions = Vec::with_capacity(particle_cnt);
         let n = f32::ceil(f32::powf(particle_cnt as f32, 1.0 / 3.0)) as usize;
 
@@ -239,10 +239,11 @@ impl FluidSimulation {
                     let jitter_y = (rand::random::<f32>() - 0.5) / 200.0;
                     let jitter_z = (rand::random::<f32>() - 0.5) / 200.0;
 
-                    positions.push(Point3::new(
+                    positions.push(Point4::new(
                         j as f32 * smoothing_radius * 0.95 - half + jitter_x,
                         i as f32 * smoothing_radius * 0.95 - half + jitter_y,
                         k as f32 * smoothing_radius * 0.95 - half + jitter_z,
+                        1.0,
                     ));
                     if positions.len() >= particle_cnt {
                         break 'outer;
@@ -277,34 +278,74 @@ impl FluidSimulation {
 
 #[cfg(test)]
 mod tests {
-    use pollster::FutureExt;
+    use nalgebra::Point4;
+    use pollster::FutureExt as _;
 
     use super::*;
 
+    fn read_buffer<T: bytemuck::Pod>(wgpu_device: &WgpuDevice, buffer: &wgpu::Buffer) -> Vec<T> {
+        let buffer_slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+
+        wgpu_device.device.poll(wgpu::Maintain::Wait);
+
+        rx.recv().unwrap().unwrap();
+
+        let data = buffer_slice.get_mapped_range().to_vec();
+        let result: Vec<T> = bytemuck::cast_slice(&data).to_vec();
+
+        drop(data);
+        buffer.unmap();
+
+        result
+    }
+
     #[test]
     fn populating_spatial_lookup() {
-        let instance = wgpu::Instance::default();
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .block_on()
-            .unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default(), None)
-            .block_on()
-            .unwrap();
+        let wgpu_device = WgpuDevice::new_compute_device().block_on().unwrap();
 
-        let particle_cnt = 10;
-        let smoothing_radius = 0.04;
-        let bbox_dimensions = Vector3::new(1.0, 0.8, 0.8);
-        let render_device = RenderDevice {
-            surface: todo!(),
-            device,
-            queue,
-            config: todo!(),
-            depth_texture: todo!(),
-        };
-        let (position_buffer, velocity_buffer, spatial_lookup_keys, spatial_lookup_vals) =
-            FluidSimulation::create_buffers(particle_cnt, smoothing_radius, &render_device);
+        // consts
+        let particle_cnt = 27;
+        let smoothing_radius = 1.0;
+        let bbox_dimensions = Vector3::new(3.0, 3.0, 3.0);
+
+        // buffers
+        let mut positions = Vec::new();
+        for i in 0..3 {
+            for j in 0..3 {
+                for k in 0..3 {
+                    positions.push(Point4::new(i as f32, j as f32, k as f32, 1.0));
+                }
+            }
+        }
+
+        let position_buffer = wgpu_device.create_buffer_init(
+            &positions,
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+        );
+
+        let spatial_lookup_keys = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Spatial lookup keys"),
+            size: (particle_cnt * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let spatial_lookup_vals = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Spatial lookup keys"),
+            size: (particle_cnt * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        // create compute task
         let spatial_lookup_task = FluidSimulation::create_spatial_lookup_task(
             particle_cnt,
             smoothing_radius,
@@ -312,22 +353,32 @@ mod tests {
             &position_buffer,
             &spatial_lookup_keys,
             &spatial_lookup_vals,
-            &render_device,
+            &wgpu_device,
         );
 
-        let test_buffer_size = (particle_cnt * std::mem::size_of::<u32>()) as u64;
-        let test_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output Buffer"),
-            size: test_buffer_size,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::MAP_READ,
+        // create the test buffer
+        let staging_buffer_keys = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer"),
+            size: spatial_lookup_keys.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Command Encoder"),
+        let staging_buffer_vals = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer"),
+            size: spatial_lookup_vals.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
         });
+
+        // execute the compute task
+        let mut encoder =
+            wgpu_device
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Command Encoder"),
+                });
+
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Compute Pass"),
@@ -335,24 +386,33 @@ mod tests {
             });
             spatial_lookup_task.execute(&mut compute_pass);
         }
-        encoder.copy_buffer_to_buffer(&spatial_lookup_keys, 0, &test_buffer, 0, test_buffer_size);
 
-        // Submit the work
-        queue.submit(Some(encoder.finish()));
+        encoder.copy_buffer_to_buffer(
+            &spatial_lookup_vals,
+            0,
+            &staging_buffer_vals,
+            0,
+            spatial_lookup_vals.size(),
+        );
+        encoder.copy_buffer_to_buffer(
+            &spatial_lookup_keys,
+            0,
+            &staging_buffer_keys,
+            0,
+            spatial_lookup_keys.size(),
+        );
+        wgpu_device.queue.submit(Some(encoder.finish()));
 
-        // Read the output buffer
-        let buffer_slice = test_buffer.slice(..);
-        let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            sender.send(result).unwrap();
-        });
-        receiver.receive().block_on().unwrap().unwrap();
+        let keys = read_buffer::<u32>(&wgpu_device, &staging_buffer_keys);
+        let vals = read_buffer::<u32>(&wgpu_device, &staging_buffer_vals);
 
-        let data = buffer_slice.get_mapped_range();
-        let result: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
-        drop(data);
-        test_buffer.unmap();
-
-        println!("{:?}", result);
+        for i in 0..27 {
+            if vals[i] != i as u32 {
+                panic!("Vals are not correct")
+            }
+            if keys[i] != i as u32 {
+                panic!("Keys are not correct")
+            }
+        }
     }
 }
