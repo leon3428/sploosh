@@ -178,6 +178,7 @@ impl FluidSimulation {
                     resource: spatial_lookup_vals.as_entire_binding(),
                 },
             ],
+            &[],
             shader_source.into(),
             (64, 1, 1),
         ));
@@ -258,6 +259,7 @@ impl FluidSimulation {
     pub fn update(&self, render_engine: &mut RenderEngine) {
         render_engine.submit_compute_request(ComputeRequest {
             compute_task: self.spatial_lookup_task.clone(),
+            push_constant: None
         });
 
         render_engine.submit_render_request(RenderRequest {
@@ -281,27 +283,9 @@ mod tests {
     use nalgebra::Point4;
     use pollster::FutureExt as _;
 
+    use crate::test_utils::read_buffer;
+
     use super::*;
-
-    fn read_buffer<T: bytemuck::Pod>(wgpu_device: &WgpuDevice, buffer: &wgpu::Buffer) -> Vec<T> {
-        let buffer_slice = buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-
-        wgpu_device.device.poll(wgpu::Maintain::Wait);
-
-        rx.recv().unwrap().unwrap();
-
-        let data = buffer_slice.get_mapped_range().to_vec();
-        let result: Vec<T> = bytemuck::cast_slice(&data).to_vec();
-
-        drop(data);
-        buffer.unmap();
-
-        result
-    }
 
     #[test]
     fn populating_spatial_lookup() {
@@ -379,13 +363,9 @@ mod tests {
                     label: Some("Command Encoder"),
                 });
 
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Compute Pass"),
-                timestamp_writes: None,
-            });
-            spatial_lookup_task.execute(&mut compute_pass);
-        }
+        
+        spatial_lookup_task.execute(&mut encoder, &[]);
+        
 
         encoder.copy_buffer_to_buffer(
             &spatial_lookup_vals,

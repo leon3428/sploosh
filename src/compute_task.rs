@@ -14,6 +14,7 @@ impl ComputeTask {
         name: &str,
         entries: &[wgpu::BindGroupLayoutEntry],
         resources: &[wgpu::BindGroupEntry],
+        push_constant_ranges: &[wgpu::PushConstantRange],
         shader_source: Cow<'_, str>,
         workgroups: (u32, u32, u32),
     ) -> Self {
@@ -38,7 +39,7 @@ impl ComputeTask {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(&format!("{name} pipeline layout")),
                 bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
+                push_constant_ranges,
             });
 
         let shader = wgpu_device
@@ -67,9 +68,16 @@ impl ComputeTask {
         }
     }
 
-    pub fn execute(&self, compute_pass: &mut wgpu::ComputePass) {
+    pub fn execute(&self, encoder: &mut wgpu::CommandEncoder, push_constants: &[u8]) {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Pass"),
+            timestamp_writes: None,
+        });
         compute_pass.set_pipeline(&self.pipeline);
         compute_pass.set_bind_group(0, &self.bind_group, &[]);
+        if push_constants.len() > 0 {
+            compute_pass.set_push_constants(0, push_constants);
+        }
         compute_pass.dispatch_workgroups(self.workgroups.0, self.workgroups.1, self.workgroups.2);
     }
 }

@@ -33,8 +33,11 @@ impl WgpuRenderDevice {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_features: wgpu::Features::PUSH_CONSTANTS,
+                    required_limits: wgpu::Limits {
+                        max_push_constant_size: 4,
+                        ..Default::default()
+                    },
                     label: None,
                     memory_hints: Default::default(),
                 },

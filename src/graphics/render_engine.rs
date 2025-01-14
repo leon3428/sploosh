@@ -25,6 +25,7 @@ pub struct GuiRenderRequest {
 
 pub struct ComputeRequest {
     pub compute_task: Rc<ComputeTask>,
+    pub push_constant: Option<u32>,
 }
 
 #[repr(C)]
@@ -181,13 +182,14 @@ impl<'a> RenderEngine {
             });
 
         {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Compute pass"),
-                timestamp_writes: None,
-            });
-
             for request in &self.compute_queue {
-                request.compute_task.execute(&mut compute_pass);
+                if let Some(pc) = request.push_constant {
+                    request
+                        .compute_task
+                        .execute(&mut encoder, bytemuck::bytes_of(&[pc]));
+                } else {
+                    request.compute_task.execute(&mut encoder, &[]);
+                };
             }
 
             self.compute_queue.clear();
