@@ -1,6 +1,7 @@
 @group(0) @binding(0) var<storage, read> keys: array<u32>;
 @group(0) @binding(1) var<storage, read_write> counters: array<atomic<u32>>;
 
+const BLOCK_SIZE = 8;
 const MASK = (1u << BLOCK_SIZE) - 1;
 const BIN_CNT = (1u << BLOCK_SIZE);
 
