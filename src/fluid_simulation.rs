@@ -1,8 +1,6 @@
-use std::{num::NonZeroU32, rc::Rc};
+use std::rc::Rc;
 
 use nalgebra::{Point4, Vector3};
-use pollster::FutureExt;
-use wgpu_sort::{GPUSorter, SortBuffers};
 
 use crate::{
     graphics::{
@@ -10,7 +8,7 @@ use crate::{
         materials::MaterialType,
         render_engine::{RenderEngine, RenderRequest},
     },
-    ComputeTask, WgpuDevice,
+    SpatialLookup, WgpuDevice,
 };
 
 pub struct FluidSimulation {
@@ -22,10 +20,7 @@ pub struct FluidSimulation {
     position_buffer: Rc<wgpu::Buffer>,
     velocity_buffer: Rc<wgpu::Buffer>,
 
-    sort: GPUSorter,
-    sort_buffers: SortBuffers,
-
-    spatial_lookup_task: Rc<ComputeTask>,
+    spatial_lookup: SpatialLookup,
 }
 
 impl FluidSimulation {
@@ -39,47 +34,6 @@ impl FluidSimulation {
         let bbox_geometry = render_engine
             .create_geometry_array(&FluidSimulation::create_bbox_geometry(&bbox_dimensions));
 
-        let (position_buffer, velocity_buffer) =
-            FluidSimulation::create_buffers(particle_cnt, smoothing_radius, wgpu_device);
-
-        let subgroup_size = 256u32; // guess_workgroup_size(&wgpu_device.device, &wgpu_device.queue).block_on().unwrap();
-        let sort = GPUSorter::new(&wgpu_device.device, subgroup_size);
-        let sort_buffers = sort.create_sort_buffers(
-            &wgpu_device.device,
-            NonZeroU32::new(particle_cnt as u32).unwrap(),
-        );
-
-        let spatial_lookup_task = FluidSimulation::create_spatial_lookup_task(
-            particle_cnt,
-            smoothing_radius,
-            bbox_dimensions,
-            &position_buffer,
-            &sort_buffers.keys(),
-            &sort_buffers.values(),
-            wgpu_device,
-        );
-
-        Self {
-            particle_cnt,
-            smoothing_radius,
-            bbox_dimensions,
-
-            bbox_geometry,
-            position_buffer,
-            velocity_buffer,
-
-            sort,
-            sort_buffers,
-
-            spatial_lookup_task,
-        }
-    }
-
-    fn create_buffers(
-        particle_cnt: usize,
-        smoothing_radius: f32,
-        wgpu_device: &WgpuDevice,
-    ) -> (Rc<wgpu::Buffer>, Rc<wgpu::Buffer>) {
         let positions = FluidSimulation::particle_start_positions(particle_cnt, smoothing_radius);
 
         let position_buffer = wgpu_device.create_buffer_init(
@@ -92,85 +46,31 @@ impl FluidSimulation {
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
         );
 
-        (position_buffer, velocity_buffer)
-    }
-
-    fn create_spatial_lookup_task(
-        particle_cnt: usize,
-        smoothing_radius: f32,
-        bbox_dimensions: Vector3<f32>,
-        position_buffer: &wgpu::Buffer,
-        spatial_lookup_keys: &wgpu::Buffer,
-        spatial_lookup_vals: &wgpu::Buffer,
-        wgpu_device: &WgpuDevice,
-    ) -> Rc<ComputeTask> {
-        let cell_cnt_x = (bbox_dimensions.x / smoothing_radius).ceil();
-        let cell_cnt_y = (bbox_dimensions.y / smoothing_radius).ceil();
-        let cell_cnt_z = (bbox_dimensions.z / smoothing_radius).ceil();
-
-        let shader_source = format!(
-            "const PARTICLE_CNT: u32 = {particle_cnt};\n
-             const SMOOTHING_RADIUS: f32 = {smoothing_radius};\n
-             const CELL_CNT: vec3<u32> = vec3<u32>({cell_cnt_x}, {cell_cnt_y}, {cell_cnt_z});\n 
-             {}",
-            include_str!("shaders/fill_spatial_lookup.wgsl")
+        let cell_cnt = Vector3::new(
+            (bbox_dimensions.x / smoothing_radius).ceil() as u32,
+            (bbox_dimensions.y / smoothing_radius).ceil() as u32,
+            (bbox_dimensions.z / smoothing_radius).ceil() as u32,
         );
 
-        let spatial_lookup_task = Rc::new(ComputeTask::new(
+        let spatial_lookup = SpatialLookup::new(
             wgpu_device,
-            "Spatial lookup",
-            &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-            &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: position_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: spatial_lookup_keys.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: spatial_lookup_vals.as_entire_binding(),
-                },
-            ],
-            &[],
-            shader_source.into(),
-            (64, 1, 1),
-        ));
+            particle_cnt,
+            smoothing_radius,
+            cell_cnt,
+            &position_buffer,
+        );
 
-        spatial_lookup_task
+        Self {
+            particle_cnt,
+            smoothing_radius,
+            bbox_dimensions,
+
+            bbox_geometry,
+            position_buffer,
+            velocity_buffer,
+
+            spatial_lookup
+        }
     }
 
     fn create_bbox_geometry(dimensions: &Vector3<f32>) -> [Vector3<f32>; 24] {
@@ -244,10 +144,7 @@ impl FluidSimulation {
     }
 
     pub fn update(&self, render_engine: &mut RenderEngine) {
-        let spatial_lookup_task = self.spatial_lookup_task.clone();
-        render_engine.submit_generic_request(Box::new(move |encoder, _| {
-            spatial_lookup_task.execute(encoder, &[])
-        }));
+        self.spatial_lookup.update(render_engine);
 
         render_engine.submit_render_request(RenderRequest {
             material_type: MaterialType::Line,
@@ -262,122 +159,5 @@ impl FluidSimulation {
                 instance_cnt: self.particle_cnt,
             },
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use nalgebra::Point4;
-    use pollster::FutureExt as _;
-
-    use crate::test_utils::read_buffer;
-
-    use super::*;
-
-    #[test]
-    fn populating_spatial_lookup() {
-        let wgpu_device = WgpuDevice::new_compute_device().block_on().unwrap();
-
-        // consts
-        let particle_cnt = 27;
-        let smoothing_radius = 1.0;
-        let bbox_dimensions = Vector3::new(3.0, 3.0, 3.0);
-
-        // buffers
-        let mut positions = Vec::new();
-        for i in 0..3 {
-            for j in 0..3 {
-                for k in 0..3 {
-                    positions.push(Point4::new(i as f32, j as f32, k as f32, 1.0));
-                }
-            }
-        }
-
-        let position_buffer = wgpu_device.create_buffer_init(
-            &positions,
-            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
-        );
-
-        let spatial_lookup_keys = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Spatial lookup keys"),
-            size: (particle_cnt * std::mem::size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
-        let spatial_lookup_vals = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Spatial lookup keys"),
-            size: (particle_cnt * std::mem::size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
-        // create compute task
-        let spatial_lookup_task = FluidSimulation::create_spatial_lookup_task(
-            particle_cnt,
-            smoothing_radius,
-            bbox_dimensions,
-            &position_buffer,
-            &spatial_lookup_keys,
-            &spatial_lookup_vals,
-            &wgpu_device,
-        );
-
-        // create the test buffer
-        let staging_buffer_keys = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Staging Buffer"),
-            size: spatial_lookup_keys.size(),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let staging_buffer_vals = wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Staging Buffer"),
-            size: spatial_lookup_vals.size(),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        // execute the compute task
-        let mut encoder =
-            wgpu_device
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Command Encoder"),
-                });
-
-        spatial_lookup_task.execute(&mut encoder, &[]);
-
-        encoder.copy_buffer_to_buffer(
-            &spatial_lookup_vals,
-            0,
-            &staging_buffer_vals,
-            0,
-            spatial_lookup_vals.size(),
-        );
-        encoder.copy_buffer_to_buffer(
-            &spatial_lookup_keys,
-            0,
-            &staging_buffer_keys,
-            0,
-            spatial_lookup_keys.size(),
-        );
-        wgpu_device.queue.submit(Some(encoder.finish()));
-
-        let keys = read_buffer::<u32>(&wgpu_device, &staging_buffer_keys);
-        let vals = read_buffer::<u32>(&wgpu_device, &staging_buffer_vals);
-
-        for i in 0..27 {
-            if vals[i] != i as u32 {
-                panic!("Vals are not correct")
-            }
-            if keys[i] != i as u32 {
-                panic!("Keys are not correct")
-            }
-        }
     }
 }

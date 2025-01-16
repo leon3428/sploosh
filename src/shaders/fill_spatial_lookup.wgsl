@@ -6,7 +6,7 @@ fn cell_key(cell: vec3<u32>) -> u32 {
     return cell.z + cell.y * CELL_CNT.z + cell.x * CELL_CNT.y * CELL_CNT.z;
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (global_id.x >= PARTICLE_CNT) {
         return;

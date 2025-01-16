@@ -13,6 +13,7 @@ pub mod camera_controller;
 pub mod compute_task;
 pub mod wgpu_device;
 pub mod test_utils;
+pub mod spatial_lookup;
 
 pub use wgpu_render_device::WgpuRenderDevice;
 pub use wgpu_device::WgpuDevice;
@@ -20,6 +21,7 @@ pub use fluid_simulation::FluidSimulation;
 pub use application_state::ApplicationState;
 pub use camera_controller::CameraController;
 pub use compute_task::ComputeTask;
+pub use spatial_lookup::SpatialLookup;
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     let event_loop = winit::event_loop::EventLoop::new()?;
