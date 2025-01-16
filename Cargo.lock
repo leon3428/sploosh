@@ -1992,6 +1992,7 @@ dependencies = [
  "pollster",
  "rand",
  "wgpu",
+ "wgpu_sort",
  "winit",
 ]
 
@@ -2546,6 +2547,17 @@ dependencies = [
  "bitflags 2.6.0",
  "js-sys",
  "web-sys",
+]
+
+[[package]]
+name = "wgpu_sort"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "env_logger",
+ "futures-intrusive",
+ "log",
+ "wgpu",
 ]
 
 [[package]]

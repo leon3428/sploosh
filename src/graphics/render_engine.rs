@@ -23,11 +23,6 @@ pub struct GuiRenderRequest {
     pub scale_factor: f32,
 }
 
-pub struct ComputeRequest {
-    pub compute_task: Rc<ComputeTask>,
-    pub push_constant: Option<u32>,
-}
-
 #[repr(C)]
 struct CameraUniform {
     pub view_proj: Matrix4<f32>,
@@ -46,7 +41,7 @@ pub struct RenderEngine {
     materials: HashMap<MaterialType, Box<dyn Material>>,
     render_queue: Vec<RenderRequest>,
     gui_request: Option<GuiRenderRequest>,
-    compute_queue: Vec<ComputeRequest>,
+    generic_queue: Vec<Box<dyn Fn(&mut wgpu::CommandEncoder, &wgpu::Queue) -> ()>>,
 
     last_frame_time: f32,
 }
@@ -119,7 +114,7 @@ impl<'a> RenderEngine {
             camera_bind_group,
             materials,
             render_queue: Vec::new(),
-            compute_queue: Vec::new(),
+            generic_queue: Vec::new(),
             gui_request: None,
             last_frame_time: 0.0,
         }
@@ -145,8 +140,8 @@ impl<'a> RenderEngine {
         self.gui_request = Some(request);
     }
 
-    pub fn submit_compute_request(&mut self, request: ComputeRequest) {
-        self.compute_queue.push(request);
+    pub fn submit_generic_request(&mut self, request: Box<dyn Fn(&mut wgpu::CommandEncoder, &wgpu::Queue) -> ()>) {
+        self.generic_queue.push(request);
     }
 
     pub fn render(&mut self, camera: &Camera) -> Result<(), wgpu::SurfaceError> {
@@ -182,17 +177,11 @@ impl<'a> RenderEngine {
             });
 
         {
-            for request in &self.compute_queue {
-                if let Some(pc) = request.push_constant {
-                    request
-                        .compute_task
-                        .execute(&mut encoder, bytemuck::bytes_of(&[pc]));
-                } else {
-                    request.compute_task.execute(&mut encoder, &[]);
-                };
+            for request in &self.generic_queue {
+                request(&mut encoder, rd.queue());
             }
 
-            self.compute_queue.clear();
+            self.generic_queue.clear();
         }
 
         {
