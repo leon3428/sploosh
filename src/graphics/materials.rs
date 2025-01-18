@@ -28,6 +28,13 @@ pub struct LineMaterial {
     pipeline: wgpu::RenderPipeline,
 }
 
+#[repr(C)]
+pub struct ColoredVertex {
+    position: nalgebra::Point3<f32>,
+    _padding: f32,
+    color: nalgebra::Vector4<f32>,
+}
+
 impl LineMaterial {
     pub fn new(
         render_device: &WgpuRenderDevice,
@@ -174,10 +181,10 @@ impl ParticleMaterial {
                         module: &shader,
                         entry_point: Some("vs_main"),
                         buffers: &[wgpu::VertexBufferLayout {
-                            array_stride: std::mem::size_of::<nalgebra::Point4<f32>>()
+                            array_stride: std::mem::size_of::<ColoredVertex>()
                                 as wgpu::BufferAddress,
                             step_mode: wgpu::VertexStepMode::Instance,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x4],
+                            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4],
                         }],
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                     },

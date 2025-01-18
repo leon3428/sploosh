@@ -8,11 +8,13 @@ fn cell_key(cell: vec3<u32>) -> u32 {
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if (global_id.x >= PARTICLE_CNT) {
+    let gid = global_id.x;
+
+    if (gid >= PARTICLE_CNT) {
         return;
     }
 
-    let cell = vec3<u32>(particle_positions[global_id.x] / SMOOTHING_RADIUS);
-    spatial_lookup_keys[global_id.x] = cell_key(cell);
-    spatial_lookup_vals[global_id.x] = global_id.x;
+    let cell = vec3<u32>(particle_positions[gid] / SMOOTHING_RADIUS);
+    spatial_lookup_keys[gid] = cell_key(cell);
+    spatial_lookup_vals[gid] = gid;
 }

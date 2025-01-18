@@ -4,7 +4,7 @@ use egui::{ClippedPrimitive, TexturesDelta};
 use egui_wgpu::Renderer;
 use nalgebra::{Matrix4, Point3};
 
-use crate::{ComputeTask, WgpuRenderDevice};
+use crate::WgpuRenderDevice;
 
 use super::{
     camera::Camera,
@@ -140,7 +140,10 @@ impl<'a> RenderEngine {
         self.gui_request = Some(request);
     }
 
-    pub fn submit_generic_request(&mut self, request: Box<dyn Fn(&mut wgpu::CommandEncoder, &wgpu::Queue) -> ()>) {
+    pub fn submit_generic_request(
+        &mut self,
+        request: Box<dyn Fn(&mut wgpu::CommandEncoder, &wgpu::Queue) -> ()>,
+    ) {
         self.generic_queue.push(request);
     }
 

@@ -69,15 +69,15 @@ impl SpatialLookup {
         render_engine.submit_generic_request(self.update_fn());
     }
 
-    pub fn buffer_a(&self) -> &wgpu::Buffer {
+    pub fn keys(&self) -> &wgpu::Buffer {
         &self.sort_buffers.keys()
     }
 
-    pub fn buffer_b(&self) -> &wgpu::Buffer {
+    pub fn vals(&self) -> &wgpu::Buffer {
         &self.sort_buffers.values()
     }
 
-    pub fn buffer_c(&self) -> &wgpu::Buffer {
+    pub fn index(&self) -> &wgpu::Buffer {
         &self.spatial_lookup_index
     }
 
@@ -431,10 +431,10 @@ mod tests {
         let tmp: Vec<u32> = (0..particle_cnt as u32).collect();
         wgpu_device
             .queue
-            .write_buffer(spatial_lookup.buffer_a(), 0, bytemuck::cast_slice(&tmp));
+            .write_buffer(spatial_lookup.keys(), 0, bytemuck::cast_slice(&tmp));
         wgpu_device
             .queue
-            .write_buffer(spatial_lookup.buffer_b(), 0, bytemuck::cast_slice(&tmp));
+            .write_buffer(spatial_lookup.vals(), 0, bytemuck::cast_slice(&tmp));
         wgpu_device.device.poll(wgpu::Maintain::Wait);
 
         let mut encoder =
@@ -447,7 +447,7 @@ mod tests {
         spatial_lookup.update_fn()(&mut encoder, &wgpu_device.queue);
 
         encoder.copy_buffer_to_buffer(
-            spatial_lookup.buffer_a(),
+            spatial_lookup.keys(),
             0,
             &staging_buffer_a,
             0,
@@ -455,7 +455,7 @@ mod tests {
         );
 
         encoder.copy_buffer_to_buffer(
-            spatial_lookup.buffer_b(),
+            spatial_lookup.vals(),
             0,
             &staging_buffer_b,
             0,
@@ -463,7 +463,7 @@ mod tests {
         );
 
         encoder.copy_buffer_to_buffer(
-            spatial_lookup.buffer_c(),
+            spatial_lookup.index(),
             0,
             &staging_buffer_c,
             0,
@@ -477,7 +477,7 @@ mod tests {
         let b = read_buffer::<u32>(&wgpu_device, &staging_buffer_b);
         let c = read_buffer::<u32>(&wgpu_device, &staging_buffer_c);
 
-        println!("{}", spatial_lookup.buffer_c().size() / 4);
+        println!("{}", spatial_lookup.index().size() / 4);
         println!("{:?}", a);
         println!("{:?}", b);
         println!("{:?}", c);
