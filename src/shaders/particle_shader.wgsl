@@ -10,14 +10,16 @@ var<uniform> camera: CameraUniform;
 
 struct VertexInput {
     @location(0) particle_pos: vec3<f32>,
+    @location(1) color: vec4<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normalized_coords: vec2<f32>,
+    @location(1) color: vec4<f32>,
 };
 
-const SIZE: f32 = 0.01;
+const SIZE: f32 = 0.001;
 const SIZE_SQ: f32 = SIZE * SIZE;
 
 @vertex
@@ -45,6 +47,7 @@ fn vs_main(
 
     out.clip_position = camera.view_projection * vec4<f32>(world_position, 1.0);
     out.normalized_coords = quad_vertices[in_vertex_index].xy;
+    out.color = vertex_input.color;
     return out;
 }
 
@@ -64,7 +67,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let brightness = max(dot(normal, light_direction.xyz), 0.0) + 0.05;
 
     var ret: FragmentOutput;
-    ret.color = vec4<f32>(brightness, brightness, brightness, 1.0);
+    ret.color = vec4<f32>(in.color.xyz * brightness, 1.0);
 
     return ret;
 }

@@ -1,18 +1,17 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, rc::Rc, sync::Arc};
 
 use winit::window::Window;
 
-use crate::graphics::texture::Texture;
+use crate::{graphics::texture::Texture, WgpuDevice};
 
-pub struct RenderDevice {
+pub struct WgpuRenderDevice {
     pub surface: wgpu::Surface<'static>,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
+    pub wgpu_device: WgpuDevice,
     pub config: wgpu::SurfaceConfiguration,
     pub depth_texture: Texture,
 }
 
-impl RenderDevice {
+impl WgpuRenderDevice {
     pub async fn new(window: Arc<Window>) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -34,8 +33,11 @@ impl RenderDevice {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_features: wgpu::Features::PUSH_CONSTANTS,
+                    required_limits: wgpu::Limits {
+                        max_push_constant_size: 4,
+                        ..Default::default()
+                    },
                     label: None,
                     memory_hints: Default::default(),
                 },
@@ -67,19 +69,30 @@ impl RenderDevice {
 
         Ok(Self {
             surface,
-            device,
-            queue,
+            wgpu_device: WgpuDevice { device, queue },
             config,
             depth_texture,
         })
+    }
+
+    pub fn device(&self) -> &wgpu::Device {
+        &self.wgpu_device.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.wgpu_device.queue
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
-            self.depth_texture = Texture::depth_texture(&self.device, &self.config);
+            self.surface.configure(self.device(), &self.config);
+            self.depth_texture = Texture::depth_texture(self.device(), &self.config);
         }
+    }
+
+    pub fn create_buffer_init<T>(&self, data: &[T], usage: wgpu::BufferUsages) -> Rc<wgpu::Buffer> {
+        self.wgpu_device.create_buffer_init(data, usage)
     }
 }

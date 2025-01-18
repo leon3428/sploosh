@@ -16,7 +16,7 @@ impl Camera {
         Self {
             position: Point3::new(0.0, 0.0, -1.0),
             target: Point3::origin(),
-            z_near: 0.1,
+            z_near: 0.01,
             z_far: 100.0,
             fov: std::f32::consts::FRAC_PI_4,
         }
@@ -28,12 +28,6 @@ impl Camera {
     }
 
     pub fn get_projection_matrix(&self, aspect: f32) -> Matrix4<f32> {
-        Perspective3::new(
-            aspect,
-            self.fov,
-            self.z_near,
-            self.z_far,
-        )
-        .to_homogeneous()
+        Perspective3::new(aspect, self.fov, self.z_near, self.z_far).to_homogeneous()
     }
 }

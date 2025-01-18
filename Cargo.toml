@@ -15,3 +15,5 @@ egui = "0.30.0"
 egui-wgpu = "0.30.0"
 egui-winit = "0.30.0"
 egui_plot = "0.30.0"
+futures-intrusive = "0.5.0"
+wgpu_sort = { path = "../wgpu_sort" }

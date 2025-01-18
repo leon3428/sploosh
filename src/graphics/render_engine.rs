@@ -1,10 +1,10 @@
-use std::{cell::RefCell, collections::HashMap, num::NonZero, rc::Rc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
 
 use egui::{ClippedPrimitive, TexturesDelta};
 use egui_wgpu::Renderer;
 use nalgebra::{Matrix4, Point3};
 
-use crate::RenderDevice;
+use crate::WgpuRenderDevice;
 
 use super::{
     camera::Camera,
@@ -32,7 +32,7 @@ struct CameraUniform {
 }
 
 pub struct RenderEngine {
-    render_device: Rc<RefCell<RenderDevice>>,
+    render_device: Rc<RefCell<WgpuRenderDevice>>,
     gui_renderer: Renderer,
 
     camera_buffer: wgpu::Buffer,
@@ -41,17 +41,18 @@ pub struct RenderEngine {
     materials: HashMap<MaterialType, Box<dyn Material>>,
     render_queue: Vec<RenderRequest>,
     gui_request: Option<GuiRenderRequest>,
+    generic_queue: Vec<Box<dyn Fn(&mut wgpu::CommandEncoder, &wgpu::Queue) -> ()>>,
 
     last_frame_time: f32,
 }
 
 impl<'a> RenderEngine {
-    pub fn new(render_device: Rc<RefCell<RenderDevice>>) -> Self {
+    pub fn new(render_device: Rc<RefCell<WgpuRenderDevice>>) -> Self {
         let rd = render_device.borrow();
 
         // Model view buffer initialization
 
-        let camera_buffer = rd.device.create_buffer(&wgpu::BufferDescriptor {
+        let camera_buffer = rd.device().create_buffer(&wgpu::BufferDescriptor {
             label: Some("Camera buffer"),
             size: std::mem::size_of::<CameraUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -59,7 +60,7 @@ impl<'a> RenderEngine {
         });
 
         let camera_bind_group_layout =
-            rd.device
+            rd.device()
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("Camera bind group layout"),
                     entries: &[wgpu::BindGroupLayoutEntry {
@@ -74,7 +75,7 @@ impl<'a> RenderEngine {
                     }],
                 });
 
-        let camera_bind_group = rd.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let camera_bind_group = rd.device().create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera bind group"),
             layout: &camera_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
@@ -97,7 +98,7 @@ impl<'a> RenderEngine {
 
         // gui
         let gui_renderer = Renderer::new(
-            &rd.device,
+            &rd.device(),
             rd.config.format,
             Some(rd.depth_texture.format()),
             1,
@@ -113,39 +114,20 @@ impl<'a> RenderEngine {
             camera_bind_group,
             materials,
             render_queue: Vec::new(),
+            generic_queue: Vec::new(),
             gui_request: None,
-            last_frame_time: 0.0
+            last_frame_time: 0.0,
         }
     }
 
     pub fn create_geometry_array<T>(&self, vertices: &[T]) -> Geometry {
         Geometry::Array {
-            vertex_buffer: self.create_buffer(vertices),
+            vertex_buffer: self.render_device.borrow().create_buffer_init(
+                vertices,
+                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            ),
             vertex_cnt: vertices.len(),
         }
-    }
-
-    pub fn create_buffer<T>(&self, data: &[T]) -> Rc<wgpu::Buffer> {
-        let rd = self.render_device.borrow();
-
-        let len = data.len() * std::mem::size_of::<T>();
-        let ptr = data.as_ptr() as *const u8;
-
-        let data = unsafe { std::slice::from_raw_parts(ptr, len) };
-
-        let buffer = rd.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Geometry buffer"),
-            size: len as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let view = rd
-            .queue
-            .write_buffer_with(&buffer, 0, NonZero::new(len as u64).unwrap());
-        view.unwrap().copy_from_slice(data);
-
-        Rc::new(buffer)
     }
 
     pub fn update(&self) {}
@@ -156,6 +138,13 @@ impl<'a> RenderEngine {
 
     pub fn submit_gui_render_request(&mut self, request: GuiRenderRequest) {
         self.gui_request = Some(request);
+    }
+
+    pub fn submit_generic_request(
+        &mut self,
+        request: Box<dyn Fn(&mut wgpu::CommandEncoder, &wgpu::Queue) -> ()>,
+    ) {
+        self.generic_queue.push(request);
     }
 
     pub fn render(&mut self, camera: &Camera) -> Result<(), wgpu::SurfaceError> {
@@ -182,13 +171,21 @@ impl<'a> RenderEngine {
         let ptr = camera_data.view_proj.as_ptr() as *const u8;
         let data = unsafe { std::slice::from_raw_parts(ptr, len) };
 
-        rd.queue.write_buffer(&self.camera_buffer, 0, data);
+        rd.queue().write_buffer(&self.camera_buffer, 0, data);
 
         let mut encoder = rd
-            .device
+            .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+
+        {
+            for request in &self.generic_queue {
+                request(&mut encoder, rd.queue());
+            }
+
+            self.generic_queue.clear();
+        }
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -247,7 +244,7 @@ impl<'a> RenderEngine {
         if let Some(request) = self.gui_request.take() {
             for (id, image_delta) in &request.textures_delta.set {
                 self.gui_renderer
-                    .update_texture(&rd.device, &rd.queue, *id, image_delta);
+                    .update_texture(&rd.device(), &rd.queue(), *id, image_delta);
             }
 
             let screen_descriptor = egui_wgpu::ScreenDescriptor {
@@ -256,8 +253,8 @@ impl<'a> RenderEngine {
             };
 
             self.gui_renderer.update_buffers(
-                &rd.device,
-                &rd.queue,
+                &rd.device(),
+                &rd.queue(),
                 &mut encoder,
                 &request.tris,
                 &screen_descriptor,
@@ -295,7 +292,7 @@ impl<'a> RenderEngine {
             }
         }
 
-        rd.queue.submit(std::iter::once(encoder.finish()));
+        rd.queue().submit(std::iter::once(encoder.finish()));
         output.present();
 
         let end_time = Instant::now();
@@ -303,7 +300,7 @@ impl<'a> RenderEngine {
 
         Ok(())
     }
-    
+
     pub fn last_frame_time(&self) -> f32 {
         self.last_frame_time
     }
