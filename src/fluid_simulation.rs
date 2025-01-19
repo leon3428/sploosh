@@ -20,6 +20,7 @@ pub struct FluidSimulation {
     position_buffer: Rc<wgpu::Buffer>,
     velocity_buffer: Rc<wgpu::Buffer>,
     density_buffer: Rc<wgpu::Buffer>,
+    force_buffer: Rc<wgpu::Buffer>,
 
     spatial_lookup: SpatialLookup,
     compute_density_task: Rc<ComputeTask>,
@@ -27,6 +28,7 @@ pub struct FluidSimulation {
     particle_display_buffer: Rc<wgpu::Buffer>,
     display_density_task: Rc<ComputeTask>,
     update_particle_task: Rc<ComputeTask>,
+    compute_pressure_task: Rc<ComputeTask>,
 }
 
 impl FluidSimulation {
@@ -35,6 +37,8 @@ impl FluidSimulation {
         smoothing_radius: f32,
         mass: f32,
         damping: f32,
+        gas_const: f32,
+        rest_density: f32,
         gravity: Vector3<f32>,
         render_engine: &RenderEngine,
         wgpu_device: &WgpuDevice,
@@ -57,6 +61,13 @@ impl FluidSimulation {
         let density_buffer = Rc::new(wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Density buffer"),
             size: (particle_cnt * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        }));
+
+        let force_buffer = Rc::new(wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Force buffer"),
+            size: (particle_cnt * std::mem::size_of::<nalgebra::Vector4<f32>>()) as u64,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         }));
@@ -116,10 +127,29 @@ impl FluidSimulation {
             particle_cnt,
             smoothing_radius,
             damping,
+            mass,
             gravity,
             bbox_dimensions,
             &position_buffer,
             &velocity_buffer,
+            &density_buffer,
+            &force_buffer,
+        );
+
+        let compute_pressure_task = FluidSimulation::create_compute_pressure_task(
+            wgpu_device,
+            particle_cnt,
+            smoothing_radius,
+            mass,
+            gas_const,
+            rest_density,
+            cell_cnt,
+            &position_buffer,
+            spatial_lookup.keys(),
+            spatial_lookup.vals(),
+            spatial_lookup.index(),
+            &density_buffer,
+            &force_buffer,
         );
 
         Self {
@@ -131,6 +161,7 @@ impl FluidSimulation {
             position_buffer,
             velocity_buffer,
             density_buffer,
+            force_buffer,
 
             spatial_lookup,
             compute_density_task,
@@ -138,6 +169,7 @@ impl FluidSimulation {
             particle_display_buffer,
             display_density_task,
             update_particle_task,
+            compute_pressure_task,
         }
     }
 
@@ -332,15 +364,149 @@ impl FluidSimulation {
         ))
     }
 
+    fn create_compute_pressure_task(
+        wgpu_device: &WgpuDevice,
+        particle_cnt: usize,
+        smoothing_radius: f32,
+        mass: f32,
+        gas_const: f32,
+        rest_density: f32,
+        cell_cnt: Vector3<u32>,
+        positions: &wgpu::Buffer,
+        spatial_lookup_keys: &wgpu::Buffer,
+        spatial_lookup_vals: &wgpu::Buffer,
+        spatial_lookup_index: &wgpu::Buffer,
+        density: &wgpu::Buffer,
+        force: &wgpu::Buffer,
+    ) -> Rc<ComputeTask> {
+        let mut workgroup_cnt = particle_cnt as u32 / 256;
+        if particle_cnt % 256 != 0 {
+            workgroup_cnt += 1;
+        }
+
+        let shader_source = format!(
+            "
+             const REST_DENSITY: f32 = {rest_density};\n
+             const GAS_CONST: f32 = {gas_const};\n
+             const SMOOTHING_RADIUS: f32 = {smoothing_radius};\n
+             const CELL_CNT: vec3<u32> = vec3<u32>({}, {}, {});\n 
+             const MASS: f32 = {mass};\n 
+             {}",
+            cell_cnt.x,
+            cell_cnt.y,
+            cell_cnt.z,
+            include_str!("shaders/compute_pressure.wgsl")
+        );
+
+        Rc::new(ComputeTask::new(
+            wgpu_device,
+            "Compute pressure",
+            &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+            &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: positions.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: spatial_lookup_keys.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: spatial_lookup_vals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: spatial_lookup_index.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: density.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: force.as_entire_binding(),
+                },
+            ],
+            &[],
+            shader_source.into(),
+            (workgroup_cnt, 1, 1),
+        ))
+    }
+
     fn create_update_particles_task(
         wgpu_device: &WgpuDevice,
         particle_cnt: usize,
         smoothing_radius: f32,
         damping: f32,
+        mass: f32,
         gravity: Vector3<f32>,
         bbox_dimensions: Vector3<f32>,
         positions: &wgpu::Buffer,
         velocities: &wgpu::Buffer,
+        densities: &wgpu::Buffer,
+        forces: &wgpu::Buffer,
     ) -> Rc<ComputeTask> {
         let mut workgroup_cnt = particle_cnt as u32 / 256;
         if particle_cnt % 256 != 0 {
@@ -350,6 +516,7 @@ impl FluidSimulation {
         let shader_source = format!(
             "
              const SMOOTHING_RADIUS: f32 = {smoothing_radius};\n
+             const MASS: f32 = {mass};\n
              const BBOX: vec3<f32> = vec3<f32>({}, {}, {});\n 
              const G: vec3<f32> = vec3<f32>({}, {}, {});\n 
              const DAMPING: f32 = {damping};\n 
@@ -387,6 +554,26 @@ impl FluidSimulation {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
             &[
                 wgpu::BindGroupEntry {
@@ -396,6 +583,14 @@ impl FluidSimulation {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: velocities.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: densities.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: forces.as_entire_binding(),
                 },
             ],
             &[wgpu::PushConstantRange {
@@ -492,6 +687,11 @@ impl FluidSimulation {
             let compute_density_task = self.compute_density_task.clone();
             render_engine.submit_generic_request(Box::new(move |encoder, _| {
                 compute_density_task.execute(encoder, &[]);
+            }));
+
+            let compute_pressure_task = self.compute_pressure_task.clone();
+            render_engine.submit_generic_request(Box::new(move |encoder, _| {
+                compute_pressure_task.execute(encoder, &[]);
             }));
 
             let update_particles_task = self.update_particle_task.clone();

@@ -1,5 +1,7 @@
 @group(0) @binding(0) var<storage, read_write> particle_positions: array<vec3<f32>>; 
 @group(0) @binding(1) var<storage, read_write> particle_velocity: array<vec3<f32>>; 
+@group(0) @binding(2) var<storage, read> particle_density: array<f32>; 
+@group(0) @binding(3) var<storage, read> particle_force: array<vec3<f32>>; 
 
 var<push_constant> dt: f32;
 
@@ -11,8 +13,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    var position: vec3<f32> = particle_positions[gid] + particle_velocity[gid] * dt;
-    var velocity: vec3<f32> = particle_velocity[gid] + G * dt ;
+    var velocity: vec3<f32> = particle_velocity[gid] + ( particle_force[gid] + G ) * (dt / MASS);
+    //var velocity: vec3<f32> = particle_velocity[gid] + G * dt + particle_force[gid] * (dt / (particle_density[gid] + 1.0e-6));
+    var position: vec3<f32> = particle_positions[gid] + velocity * dt;
 
     if position.x - SMOOTHING_RADIUS < 0.0 {
         velocity.x *= DAMPING;

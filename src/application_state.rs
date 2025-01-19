@@ -32,11 +32,13 @@ impl ApplicationState {
         let render_device = Rc::new(RefCell::new(WgpuRenderDevice::new(window.clone()).await?));
         let render_engine = RenderEngine::new(render_device.clone());
         let fluid_sim = FluidSimulation::new(
-            900,
-            0.04,
-            0.001,
-            -0.9,
-            nalgebra::Vector3::new(0.0, -1.0, 0.0),
+            40 * 40 * 40,
+            0.01,
+            0.0001,
+            -0.6,
+            0.000001,
+            200.0,
+            nalgebra::Vector3::new(0.0, -0.00005, 0.0),
             &render_engine,
             &render_device.borrow().wgpu_device,
         );
