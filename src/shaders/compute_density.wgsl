@@ -4,6 +4,11 @@
 @group(0) @binding(3) var<storage, read> spatial_lookup_index: array<u32>;
 @group(0) @binding(4) var<storage, read_write> density: array<f32>;
 
+
+const PI = 3.14159;
+const HSQ = SMOOTHING_RADIUS * SMOOTHING_RADIUS;
+const POLY6 = 315.0 / (64.0 * PI * pow(SMOOTHING_RADIUS, 9.0));
+
 fn cell_key(cell: vec3<u32>) -> u32 {
     return cell.z + cell.y * CELL_CNT.z + cell.x * CELL_CNT.y * CELL_CNT.z;
 }
@@ -17,6 +22,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let particle_cell = vec3<i32>(particle_positions[gid] / SMOOTHING_RADIUS);
+    var d: f32 = 0.0;
 
     for (var i = -1; i <= 1; i += 1) {
         for (var j = -1; j <= 1; j += 1) {
@@ -42,14 +48,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let neighbor_cell_key = cell_key(vec3<u32>(neighbor_cell));
                 for (var l = spatial_lookup_index[neighbor_cell_key]; spatial_lookup_keys[l] == neighbor_cell_key; l += 1u) {
                     let ind = spatial_lookup_vals[l];
-                    if (distance(particle_positions[gid], particle_positions[ind]) < SMOOTHING_RADIUS) {
+                    let dist = distance(particle_positions[gid], particle_positions[ind]);
+                    if (dist < SMOOTHING_RADIUS) {
                         // hit
-                        if (gid == 225) {
-                            density[ind] = 0.95;
-                        } 
+                        let dist_sq = dist * dist;
+                        d += MASS * POLY6 * (HSQ - dist_sq) * (HSQ - dist_sq) * (HSQ - dist_sq);
                     }
                 }
             }
         }
     }
+
+    density[gid] = d;
 }

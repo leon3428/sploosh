@@ -15,18 +15,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let d = density[gid] + 0.05;
+    let cmin = vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    let cmax = vec4<f32>(1.0, 0.0, 0.0, 1.0);
 
     var particle: ColoredParticle;
 
-    particle.position = position[gid];
-    if (gid == 225) {
-        particle.color = vec4<f32>(1.0, 0.0, 0.0, 1.0);
-    } else {
-        particle.color = vec4<f32>(d, d, d, 1.0);
-    }
-   
-    
+    let alpha = clamp(density[gid] / 100.0, 0.0, 1.0);
+
+    particle.position = position[gid] + OFFSET;
+    particle.color = mix(cmin, cmax, alpha);
 
     display[gid] = particle;
 }

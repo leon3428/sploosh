@@ -47,6 +47,7 @@ impl InputHelper {
         self.mouse_dx = 0.0;
         self.mouse_dy = 0.0;
         self.mouse_dw = 0.0;
+        self.keyboard_button_map.clear();
     }
 
     pub fn is_key_pressed(&self, key: PhysicalKey) -> bool {
