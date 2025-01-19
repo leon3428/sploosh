@@ -20,7 +20,7 @@ fn calculate_pressure(density: f32) -> f32 {
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let gid = global_id.x;
+    let gid = global_id.x + GHOST_PARTICLE_CNT;
 
     if (gid >= arrayLength(&particle_positions)) {
         return;

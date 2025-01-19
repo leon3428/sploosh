@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use nalgebra::{Point4, Vector3};
+use nalgebra::{Point, Point4, Vector3};
 
 use crate::{
     graphics::{
@@ -44,11 +44,11 @@ impl FluidSimulation {
         render_engine: &RenderEngine,
         wgpu_device: &WgpuDevice,
     ) -> Self {
-        let bbox_dimensions = Vector3::new(10.0, 8.0, 8.0);
+        let bbox_dimensions = Vector3::new(14.0, 6.0, 4.0);
         let bbox_geometry = render_engine
             .create_geometry_array(&FluidSimulation::create_bbox_geometry(&bbox_dimensions));
 
-        let positions = FluidSimulation::particle_start_positions(
+        let (positions, ghost_particle_cnt) = FluidSimulation::particle_start_positions(
             particle_cnt,
             smoothing_radius,
             bbox_dimensions,
@@ -59,12 +59,11 @@ impl FluidSimulation {
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
         );
 
-        let density_buffer = Rc::new(wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Density buffer"),
-            size: (particle_cnt * std::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        }));
+        let densities = vec![rest_density; particle_cnt];
+        let density_buffer = wgpu_device.create_buffer_init(
+            &densities,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        );
 
         let force_buffer = Rc::new(wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Force buffer"),
@@ -104,6 +103,7 @@ impl FluidSimulation {
         let compute_density_task = FluidSimulation::create_compute_density_task(
             wgpu_device,
             particle_cnt,
+            ghost_particle_cnt,
             smoothing_radius,
             mass,
             cell_cnt,
@@ -126,6 +126,7 @@ impl FluidSimulation {
         let update_particle_task = FluidSimulation::create_update_particles_task(
             wgpu_device,
             particle_cnt,
+            ghost_particle_cnt,
             smoothing_radius,
             damping,
             mass,
@@ -140,6 +141,7 @@ impl FluidSimulation {
         let compute_force_task = FluidSimulation::create_compute_force_task(
             wgpu_device,
             particle_cnt,
+            ghost_particle_cnt,
             smoothing_radius,
             mass,
             gas_const,
@@ -221,12 +223,34 @@ impl FluidSimulation {
         particle_cnt: usize,
         smoothing_radius: f32,
         bbox_dimensions: Vector3<f32>,
-    ) -> Vec<Point4<f32>> {
+    ) -> (Vec<Point4<f32>>, usize) {
         let mut positions = Vec::with_capacity(particle_cnt);
-        let n = f32::ceil(f32::powf(particle_cnt as f32, 1.0 / 3.0)) as usize;
 
         let squeeze_const = 0.55;
+        let num_ghost_layers = 2;
 
+        for i in 0..num_ghost_layers {
+            let mut x = 0.0;
+            while x < bbox_dimensions.x {
+                let mut z = 0.0;
+                while z < bbox_dimensions.z {
+                    positions.push(Point4::new(
+                        x,
+                        i as f32 * smoothing_radius * squeeze_const,
+                        z,
+                        1.0,
+                    ));
+                    z += smoothing_radius * squeeze_const;
+                }
+                x += smoothing_radius * squeeze_const;
+            }
+        }
+
+        let ghost_particle_cnt = positions.len();
+        let n = f32::ceil(f32::powf(
+            (particle_cnt - ghost_particle_cnt) as f32,
+            1.0 / 3.0,
+        )) as usize;
         let half = ((n - 1) as f32 * smoothing_radius * squeeze_const) / 2.0;
 
         'outer: for i in 0..n {
@@ -252,12 +276,13 @@ impl FluidSimulation {
             }
         }
 
-        positions
+        (positions, ghost_particle_cnt)
     }
 
     fn create_compute_density_task(
         wgpu_device: &WgpuDevice,
         particle_cnt: usize,
+        ghost_particle_cnt: usize,
         smoothing_radius: f32,
         mass: f32,
         cell_cnt: Vector3<u32>,
@@ -267,13 +292,14 @@ impl FluidSimulation {
         spatial_lookup_index: &wgpu::Buffer,
         density: &wgpu::Buffer,
     ) -> Rc<ComputeTask> {
-        let mut workgroup_cnt = particle_cnt as u32 / 256;
-        if particle_cnt % 256 != 0 {
+        let mut workgroup_cnt = (particle_cnt - ghost_particle_cnt) as u32 / 256;
+        if (particle_cnt - ghost_particle_cnt) % 256 != 0 {
             workgroup_cnt += 1;
         }
 
         let shader_source = format!(
             "
+             const GHOST_PARTICLE_CNT: u32 = {ghost_particle_cnt};\n
              const SMOOTHING_RADIUS: f32 = {smoothing_radius};\n
              const CELL_CNT: vec3<u32> = vec3<u32>({}, {}, {});\n 
              const MASS: f32 = {mass};\n 
@@ -370,6 +396,7 @@ impl FluidSimulation {
     fn create_compute_force_task(
         wgpu_device: &WgpuDevice,
         particle_cnt: usize,
+        ghost_particle_cnt: usize,
         smoothing_radius: f32,
         mass: f32,
         gas_const: f32,
@@ -384,13 +411,14 @@ impl FluidSimulation {
         density: &wgpu::Buffer,
         force: &wgpu::Buffer,
     ) -> Rc<ComputeTask> {
-        let mut workgroup_cnt = particle_cnt as u32 / 256;
-        if particle_cnt % 256 != 0 {
+        let mut workgroup_cnt = (particle_cnt - ghost_particle_cnt) as u32 / 256;
+        if (particle_cnt - ghost_particle_cnt) % 256 != 0 {
             workgroup_cnt += 1;
         }
 
         let shader_source = format!(
             "
+             const GHOST_PARTICLE_CNT: u32 = {ghost_particle_cnt};\n
              const REST_DENSITY: f32 = {rest_density};\n
              const GAS_CONST: f32 = {gas_const};\n
              const SMOOTHING_RADIUS: f32 = {smoothing_radius};\n
@@ -518,6 +546,7 @@ impl FluidSimulation {
     fn create_update_particles_task(
         wgpu_device: &WgpuDevice,
         particle_cnt: usize,
+        ghost_particle_cnt: usize,
         smoothing_radius: f32,
         damping: f32,
         mass: f32,
@@ -528,13 +557,14 @@ impl FluidSimulation {
         densities: &wgpu::Buffer,
         forces: &wgpu::Buffer,
     ) -> Rc<ComputeTask> {
-        let mut workgroup_cnt = particle_cnt as u32 / 256;
-        if particle_cnt % 256 != 0 {
+        let mut workgroup_cnt = (particle_cnt - ghost_particle_cnt) as u32 / 256;
+        if (particle_cnt - ghost_particle_cnt) % 256 != 0 {
             workgroup_cnt += 1;
         }
 
         let shader_source = format!(
             "
+             const GHOST_PARTICLE_CNT: u32 = {ghost_particle_cnt};\n
              const SMOOTHING_RADIUS: f32 = {smoothing_radius};\n
              const MASS: f32 = {mass};\n
              const BBOX: vec3<f32> = vec3<f32>({}, {}, {});\n 
