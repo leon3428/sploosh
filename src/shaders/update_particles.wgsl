@@ -13,9 +13,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    var velocity: vec3<f32> = particle_velocity[gid] + ( particle_force[gid] + G ) * (dt / MASS);
-    //var velocity: vec3<f32> = particle_velocity[gid] + G * dt + particle_force[gid] * (dt / (particle_density[gid] + 1.0e-6));
-    var position: vec3<f32> = particle_positions[gid] + velocity * dt;
+    //var velocity: vec3<f32> = particle_velocity[gid] + ( particle_force[gid] + G ) * (dt / MASS);
+    // var velocity: vec3<f32> = particle_velocity[gid] /*+ G * dt*/ + particle_force[gid] * (dt / particle_density[gid]);
+    // var position: vec3<f32> = particle_positions[gid] + velocity * dt;
+
+    let dv = G * dt / 2.0 +  particle_force[gid] * (dt / (2.0 * particle_density[gid]));
+    var half_velocity: vec3<f32> = particle_velocity[gid] + dv;
+    var position: vec3<f32> = particle_positions[gid] + half_velocity * dt;
+    var velocity: vec3<f32> = half_velocity + dv;
 
     if position.x - SMOOTHING_RADIUS < 0.0 {
         velocity.x *= DAMPING;

@@ -20,7 +20,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var particle: ColoredParticle;
 
-    let alpha = clamp(density[gid] / 400.0, 0.0, 1.0);
+    let alpha = clamp((density[gid] - 150.0) / 100.0, 0.0, 1.0);
 
     particle.position = position[gid] + OFFSET;
     particle.color = mix(cmin, cmax, alpha);

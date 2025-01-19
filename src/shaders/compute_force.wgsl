@@ -1,12 +1,14 @@
 @group(0) @binding(0) var<storage, read> particle_positions: array<vec3<f32>>; 
-@group(0) @binding(1) var<storage, read> spatial_lookup_keys: array<u32>;
-@group(0) @binding(2) var<storage, read> spatial_lookup_vals: array<u32>;
-@group(0) @binding(3) var<storage, read> spatial_lookup_index: array<u32>;
-@group(0) @binding(4) var<storage, read> particle_density: array<f32>;
-@group(0) @binding(5) var<storage, read_write> particle_force: array<vec3<f32>>;
+@group(0) @binding(1) var<storage, read> particle_velocities: array<vec3<f32>>; 
+@group(0) @binding(2) var<storage, read> spatial_lookup_keys: array<u32>;
+@group(0) @binding(3) var<storage, read> spatial_lookup_vals: array<u32>;
+@group(0) @binding(4) var<storage, read> spatial_lookup_index: array<u32>;
+@group(0) @binding(5) var<storage, read> particle_density: array<f32>;
+@group(0) @binding(6) var<storage, read_write> particle_force: array<vec3<f32>>;
 
 const PI = 3.14159;
 const SPIKY_GRAD = 15.0 / (PI * pow(SMOOTHING_RADIUS, 6.0));
+const VISC_LAP = 45.0 / (PI * pow(SMOOTHING_RADIUS, 6.0));
 
 fn cell_key(cell: vec3<u32>) -> u32 {
     return cell.z + cell.y * CELL_CNT.z + cell.x * CELL_CNT.y * CELL_CNT.z;
@@ -24,6 +26,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
+    let particle_velocity = particle_velocities[gid];
     let particle_pos = particle_positions[gid];
     let particle_den = particle_density[gid];
     let particle_pressure = calculate_pressure(particle_den);
@@ -60,16 +63,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                     let neighbor_pos = particle_positions[ind];
 
-                    let dir = particle_pos - neighbor_pos;
+                    var dir: vec3<f32> = particle_pos - neighbor_pos;
                     let dist = length(dir);
 
                     if (dist < SMOOTHING_RADIUS) {
                         // hit
+                        if (dist == 0) {
+                            dir = vec3<f32>(1.0, 0.0, 0.0);
+                        }
+
                         let neighbor_density = particle_density[ind];
                         let neighbor_pressure = calculate_pressure(neighbor_density);
+                        let neighbor_velocity = particle_velocities[ind];
 
                         let diff = (SMOOTHING_RADIUS - dist);
-                        force += -normalize(dir) * MASS * (particle_pressure + neighbor_pressure) / (2.0 * neighbor_density + 1.0e-6) * SPIKY_GRAD * diff * diff * diff;
+                        let norm_dir = normalize(dir);
+                        force += norm_dir * MASS * (particle_pressure + neighbor_pressure)  * SPIKY_GRAD * diff * diff * diff / (2.0 * neighbor_density);
+                        force += VISCOSITY * MASS * (neighbor_velocity - particle_velocity) * VISC_LAP * diff / neighbor_density;
                     }
                 }
             }

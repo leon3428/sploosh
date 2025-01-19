@@ -28,7 +28,7 @@ pub struct FluidSimulation {
     particle_display_buffer: Rc<wgpu::Buffer>,
     display_density_task: Rc<ComputeTask>,
     update_particle_task: Rc<ComputeTask>,
-    compute_pressure_task: Rc<ComputeTask>,
+    compute_force_task: Rc<ComputeTask>,
 }
 
 impl FluidSimulation {
@@ -39,11 +39,12 @@ impl FluidSimulation {
         damping: f32,
         gas_const: f32,
         rest_density: f32,
+        viscosity: f32,
         gravity: Vector3<f32>,
         render_engine: &RenderEngine,
         wgpu_device: &WgpuDevice,
     ) -> Self {
-        let bbox_dimensions = Vector3::new(1.0, 0.8, 0.8);
+        let bbox_dimensions = Vector3::new(10.0, 8.0, 8.0);
         let bbox_geometry = render_engine
             .create_geometry_array(&FluidSimulation::create_bbox_geometry(&bbox_dimensions));
 
@@ -136,15 +137,17 @@ impl FluidSimulation {
             &force_buffer,
         );
 
-        let compute_pressure_task = FluidSimulation::create_compute_pressure_task(
+        let compute_force_task = FluidSimulation::create_compute_force_task(
             wgpu_device,
             particle_cnt,
             smoothing_radius,
             mass,
             gas_const,
             rest_density,
+            viscosity,
             cell_cnt,
             &position_buffer,
+            &velocity_buffer,
             spatial_lookup.keys(),
             spatial_lookup.vals(),
             spatial_lookup.index(),
@@ -169,7 +172,7 @@ impl FluidSimulation {
             particle_display_buffer,
             display_density_task,
             update_particle_task,
-            compute_pressure_task,
+            compute_force_task,
         }
     }
 
@@ -222,16 +225,16 @@ impl FluidSimulation {
         let mut positions = Vec::with_capacity(particle_cnt);
         let n = f32::ceil(f32::powf(particle_cnt as f32, 1.0 / 3.0)) as usize;
 
-        let squeeze_const = 0.95;
+        let squeeze_const = 0.55;
 
         let half = ((n - 1) as f32 * smoothing_radius * squeeze_const) / 2.0;
 
         'outer: for i in 0..n {
             for j in 0..n {
                 for k in 0..n {
-                    let jitter_x = (rand::random::<f32>() - 0.5) / 200.0;
-                    let jitter_y = (rand::random::<f32>() - 0.5) / 200.0;
-                    let jitter_z = (rand::random::<f32>() - 0.5) / 200.0;
+                    let jitter_x = (rand::random::<f32>() - 0.5) * smoothing_radius / 6.0;
+                    let jitter_y = (rand::random::<f32>() - 0.5) * smoothing_radius / 6.0;
+                    let jitter_z = (rand::random::<f32>() - 0.5) * smoothing_radius / 6.0;
 
                     positions.push(Point4::new(
                         j as f32 * smoothing_radius * squeeze_const + jitter_x - half
@@ -364,15 +367,17 @@ impl FluidSimulation {
         ))
     }
 
-    fn create_compute_pressure_task(
+    fn create_compute_force_task(
         wgpu_device: &WgpuDevice,
         particle_cnt: usize,
         smoothing_radius: f32,
         mass: f32,
         gas_const: f32,
         rest_density: f32,
+        viscosity: f32,
         cell_cnt: Vector3<u32>,
         positions: &wgpu::Buffer,
+        velocities: &wgpu::Buffer,
         spatial_lookup_keys: &wgpu::Buffer,
         spatial_lookup_vals: &wgpu::Buffer,
         spatial_lookup_index: &wgpu::Buffer,
@@ -391,11 +396,12 @@ impl FluidSimulation {
              const SMOOTHING_RADIUS: f32 = {smoothing_radius};\n
              const CELL_CNT: vec3<u32> = vec3<u32>({}, {}, {});\n 
              const MASS: f32 = {mass};\n 
+             const VISCOSITY: f32 = {viscosity};\n 
              {}",
             cell_cnt.x,
             cell_cnt.y,
             cell_cnt.z,
-            include_str!("shaders/compute_pressure.wgsl")
+            include_str!("shaders/compute_force.wgsl")
         );
 
         Rc::new(ComputeTask::new(
@@ -456,6 +462,16 @@ impl FluidSimulation {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
@@ -470,22 +486,26 @@ impl FluidSimulation {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: spatial_lookup_keys.as_entire_binding(),
+                    resource: velocities.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: spatial_lookup_vals.as_entire_binding(),
+                    resource: spatial_lookup_keys.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: spatial_lookup_index.as_entire_binding(),
+                    resource: spatial_lookup_vals.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: density.as_entire_binding(),
+                    resource: spatial_lookup_index.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
+                    resource: density.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
                     resource: force.as_entire_binding(),
                 },
             ],
@@ -689,9 +709,9 @@ impl FluidSimulation {
                 compute_density_task.execute(encoder, &[]);
             }));
 
-            let compute_pressure_task = self.compute_pressure_task.clone();
+            let compute_force_task = self.compute_force_task.clone();
             render_engine.submit_generic_request(Box::new(move |encoder, _| {
-                compute_pressure_task.execute(encoder, &[]);
+                compute_force_task.execute(encoder, &[]);
             }));
 
             let update_particles_task = self.update_particle_task.clone();
