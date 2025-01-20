@@ -19,7 +19,7 @@ struct VertexOutput {
     @location(1) color: vec4<f32>,
 };
 
-const SIZE: f32 = 0.001;
+const SIZE: f32 = 0.05;
 const SIZE_SQ: f32 = SIZE * SIZE;
 
 @vertex

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::VecDeque, error::Error, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::VecDeque, error::Error, rc::Rc, sync::Arc, time::Instant};
 
 use egui::Slider;
 use egui_plot::{Line, Plot, PlotPoints};
@@ -22,14 +22,27 @@ pub struct ApplicationState {
     fluid_sim: FluidSimulation,
     frame_times: VecDeque<f32>,
 
+    simulation_paused: bool,
     particle_display_size: f32,
+    prev_time: Instant,
 }
 
 impl ApplicationState {
     pub async fn new(window: Arc<Window>) -> Result<Self, Box<dyn Error>> {
         let render_device = Rc::new(RefCell::new(WgpuRenderDevice::new(window.clone()).await?));
         let render_engine = RenderEngine::new(render_device.clone());
-        let fluid_sim = FluidSimulation::new(900, 0.04, &render_engine, &render_device.borrow().wgpu_device);
+        let fluid_sim = FluidSimulation::new(
+            100_000,
+            0.15,
+            0.12,
+            -0.6,
+            350.0,
+            200.0,
+            1.15,
+            nalgebra::Vector3::new(0.0, -1.0, 0.0),
+            &render_engine,
+            &render_device.borrow().wgpu_device,
+        );
         let gui = Egui::new(&window);
 
         Ok(Self {
@@ -41,7 +54,10 @@ impl ApplicationState {
             camera_controller: CameraController::new(),
             fluid_sim,
             frame_times: VecDeque::new(),
+
+            simulation_paused: true,
             particle_display_size: 0.01,
+            prev_time: Instant::now(),
         })
     }
 
@@ -54,9 +70,24 @@ impl ApplicationState {
     }
 
     pub fn update(&mut self, input_helper: &InputHelper) {
+        let time = Instant::now();
+        let dt = (time - self.prev_time).as_secs_f32();
+        self.prev_time = time;
+
         self.camera_controller
             .update_camera(input_helper, &mut self.camera);
-        self.fluid_sim.update(&mut self.render_engine);
+
+        if input_helper.is_key_pressed(winit::keyboard::PhysicalKey::Code(
+            winit::keyboard::KeyCode::Space,
+        )) {
+            if self.simulation_paused {
+                self.prev_time = Instant::now();
+            }
+            self.simulation_paused = !self.simulation_paused;
+        }
+
+        self.fluid_sim
+            .update(&mut self.render_engine, dt, self.simulation_paused);
     }
 
     pub fn redraw(&mut self) {
@@ -88,6 +119,12 @@ impl ApplicationState {
                     .show(ui, |plot_ui| {
                         plot_ui.line(line);
                     });
+
+                ui.label(if self.simulation_paused {
+                    "Simulation paused"
+                } else {
+                    "Simulation running"
+                });
                 ui.label("Particle display size:");
                 ui.add(Slider::new(&mut self.particle_display_size, 0.001..=0.5).text("Size"));
             },

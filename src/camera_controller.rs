@@ -13,16 +13,15 @@ pub struct CameraController {
 impl CameraController {
     pub fn new() -> Self {
         Self {
-            radius: 1.0,
+            radius: 10.0,
             phi: 0.0,
             theta: f32::consts::FRAC_2_PI,
-            zoom_sensitivity: 0.001,
+            zoom_sensitivity: 0.01,
             orbit_sensitivity: 0.003,
         }
     }
 
     pub fn update_camera(&mut self, input_helper: &InputHelper, camera: &mut Camera) {
-
         self.radius += input_helper.mouse_wheel_delta() * self.zoom_sensitivity;
         self.radius = f32::max(self.radius, camera.z_near);
 
