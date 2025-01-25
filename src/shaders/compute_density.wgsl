@@ -13,6 +13,10 @@ fn cell_key(cell: vec3<u32>) -> u32 {
     return cell.z + cell.y * CELL_CNT.z + cell.x * CELL_CNT.y * CELL_CNT.z;
 }
 
+const dx = array(-1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+const dy = array(-1, -1, -1, 0, 0, 0, 1, 1, 1, -1, -1, -1, 0, 0, 0, 1, 1, 1, -1, -1, -1, 0, 0, 0, 1, 1, 1);
+const dz = array(1, 0, 1, -1, 0, 1, -1, 0, 1, -1, 0, 1, -1, 0, 1, -1, 0, 1, -1, 0, 1, -1, 0, 1, -1, 0, 1);
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let gid = global_id.x + GHOST_PARTICLE_CNT;
@@ -21,44 +25,35 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let particle_cell = vec3<i32>(particle_positions[gid] / SMOOTHING_RADIUS);
+    let particle_pos = particle_positions[gid];
+    let particle_cell = vec3<i32>(particle_pos / SMOOTHING_RADIUS);
     var d: f32 = 0.0;
 
-    for (var i = -1; i <= 1; i += 1) {
-        for (var j = -1; j <= 1; j += 1) {
-            for (var k = -1; k <= 1; k += 1) {
-                let neighbor_cell = vec3<i32>(
-                    particle_cell.x + i, 
-                    particle_cell.y + j, 
-                    particle_cell.z + k
-                );
+    for (var i = 0; i < 27; i += 1) {
+        let neighbor_cell = vec3<i32>(
+            particle_cell.x + dx[i], 
+            particle_cell.y + dy[i], 
+            particle_cell.z + dz[i]
+        );
 
-                if (neighbor_cell.x < 0 || u32(neighbor_cell.x) >= CELL_CNT.x) {
-                    continue;
-                }
+        let is_valid_cell = all(neighbor_cell >= vec3<i32>(0)) && 
+                            all(vec3<u32>(neighbor_cell) < CELL_CNT);
 
-                if (neighbor_cell.y < 0 || u32(neighbor_cell.y) >= CELL_CNT.y) {
-                    continue;
-                }
-
-                if (neighbor_cell.z < 0 || u32(neighbor_cell.z) >= CELL_CNT.z) {
-                    continue;
-                }
-
-                let neighbor_cell_key = cell_key(vec3<u32>(neighbor_cell));
-                for (var l = spatial_lookup_index[neighbor_cell_key]; spatial_lookup_keys[l] == neighbor_cell_key; l += 1u) {
-                    let ind = spatial_lookup_vals[l];
-
-                    let dist = distance(particle_positions[gid], particle_positions[ind]);
-                    if (dist < SMOOTHING_RADIUS) {
-                        // hit
-                        let dist_sq = dist * dist;
-                        let diff = (HSQ - dist_sq);
-                        d += MASS * POLY6 * diff * diff * diff;
-                    }
-                }
-            }
+        if (!is_valid_cell) {
+            continue;
         }
+
+        let neighbor_cell_key = cell_key(vec3<u32>(neighbor_cell));
+        for (var l = spatial_lookup_index[neighbor_cell_key]; spatial_lookup_keys[l] == neighbor_cell_key; l += 1u) {
+            let ind = spatial_lookup_vals[l];
+
+            let dist = distance(particle_pos, particle_positions[ind]);
+            let dist_sq = dist * dist;
+            let is_within_radius = dist < SMOOTHING_RADIUS;
+
+            let diff = select(0.0, HSQ - dist_sq, is_within_radius);
+            d += MASS * POLY6 * diff * diff * diff;
+        }    
     }
 
     density[gid] = d;
