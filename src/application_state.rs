@@ -5,6 +5,7 @@ use egui_plot::{Line, Plot, PlotPoints};
 use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
 
 use crate::{
+    fluid_simulation::FluidSimulationConfig,
     graphics::{Camera, RenderEngine},
     gui::Egui,
     input_helper::InputHelper,
@@ -31,18 +32,21 @@ impl ApplicationState {
     pub async fn new(window: Arc<Window>) -> Result<Self, Box<dyn Error>> {
         let render_device = Rc::new(RefCell::new(WgpuRenderDevice::new(window.clone()).await?));
         let render_engine = RenderEngine::new(render_device.clone());
-        let fluid_sim = FluidSimulation::new(
-            100_000,
-            0.15,
-            0.12,
-            -0.6,
-            350.0,
-            200.0,
-            1.15,
-            nalgebra::Vector3::new(0.0, -1.0, 0.0),
-            &render_engine,
-            &render_device.borrow().wgpu_device,
-        );
+
+        let config = FluidSimulationConfig {
+            particle_cnt: 100_000,
+            smoothing_radius: 0.15,
+            mass: 0.12,
+            damping: -0.7,
+            gas_const: 350.0,
+            rest_density: 200.0,
+            viscosity: 1.15,
+            gravity: nalgebra::Vector3::new(0.0, -1.0, 0.0),
+            bbox_dimensions: nalgebra::Vector3::new(14.0, 6.0, 4.0),
+        };
+
+        let fluid_sim =
+            FluidSimulation::new(config, &render_engine, &render_device.borrow().wgpu_device);
         let gui = Egui::new(&window);
 
         Ok(Self {

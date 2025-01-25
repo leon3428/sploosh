@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use nalgebra::{Point, Point4, Vector3};
+use nalgebra::{Point4, Vector3};
 
 use crate::{
     graphics::{
@@ -11,16 +11,25 @@ use crate::{
     ComputeTask, SpatialLookup, WgpuDevice,
 };
 
-pub struct FluidSimulation {
-    particle_cnt: usize,
-    smoothing_radius: f32,
-    bbox_dimensions: Vector3<f32>,
+pub struct FluidSimulationConfig {
+    pub particle_cnt: usize,
+    pub smoothing_radius: f32,
+    pub mass: f32,
+    pub damping: f32,
+    pub gas_const: f32,
+    pub rest_density: f32,
+    pub viscosity: f32,
+    pub gravity: Vector3<f32>,
+    pub bbox_dimensions: Vector3<f32>,
+}
 
+pub struct FluidSimulation {
+    config: FluidSimulationConfig,
     bbox_geometry: Geometry,
-    position_buffer: Rc<wgpu::Buffer>,
-    velocity_buffer: Rc<wgpu::Buffer>,
-    density_buffer: Rc<wgpu::Buffer>,
-    force_buffer: Rc<wgpu::Buffer>,
+    _position_buffer: Rc<wgpu::Buffer>,
+    _velocity_buffer: Rc<wgpu::Buffer>,
+    _density_buffer: Rc<wgpu::Buffer>,
+    _force_buffer: Rc<wgpu::Buffer>,
 
     spatial_lookup: SpatialLookup,
     compute_density_task: Rc<ComputeTask>,
@@ -33,25 +42,17 @@ pub struct FluidSimulation {
 
 impl FluidSimulation {
     pub fn new(
-        particle_cnt: usize,
-        smoothing_radius: f32,
-        mass: f32,
-        damping: f32,
-        gas_const: f32,
-        rest_density: f32,
-        viscosity: f32,
-        gravity: Vector3<f32>,
+        config: FluidSimulationConfig,
         render_engine: &RenderEngine,
         wgpu_device: &WgpuDevice,
     ) -> Self {
-        let bbox_dimensions = Vector3::new(14.0, 6.0, 4.0);
         let bbox_geometry = render_engine
-            .create_geometry_array(&FluidSimulation::create_bbox_geometry(&bbox_dimensions));
+            .create_geometry_array(&FluidSimulation::create_bbox_geometry(&config.bbox_dimensions));
 
         let (positions, ghost_particle_cnt) = FluidSimulation::particle_start_positions(
-            particle_cnt,
-            smoothing_radius,
-            bbox_dimensions,
+            config.particle_cnt,
+            config.smoothing_radius,
+            config.bbox_dimensions,
         );
 
         let position_buffer = wgpu_device.create_buffer_init(
@@ -59,7 +60,7 @@ impl FluidSimulation {
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
         );
 
-        let densities = vec![rest_density; particle_cnt];
+        let densities = vec![config.rest_density; config.particle_cnt];
         let density_buffer = wgpu_device.create_buffer_init(
             &densities,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
@@ -67,12 +68,12 @@ impl FluidSimulation {
 
         let force_buffer = Rc::new(wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Force buffer"),
-            size: (particle_cnt * std::mem::size_of::<nalgebra::Vector4<f32>>()) as u64,
+            size: (config.particle_cnt * std::mem::size_of::<nalgebra::Vector4<f32>>()) as u64,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         }));
 
-        let velocity = vec![nalgebra::Vector4::<f32>::new(0.0, 0.0, 0.0, 1.0); particle_cnt];
+        let velocity = vec![nalgebra::Vector4::<f32>::new(0.0, 0.0, 0.0, 1.0); config.particle_cnt];
         let velocity_buffer = wgpu_device.create_buffer_init(
             &velocity,
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
@@ -81,31 +82,31 @@ impl FluidSimulation {
         let particle_display_buffer =
             Rc::new(wgpu_device.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Display buffer"),
-                size: (particle_cnt * std::mem::size_of::<ColoredVertex>()) as u64,
+                size: (config.particle_cnt * std::mem::size_of::<ColoredVertex>()) as u64,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE,
                 mapped_at_creation: false,
             }));
 
         let cell_cnt = Vector3::new(
-            (bbox_dimensions.x / smoothing_radius).ceil() as u32,
-            (bbox_dimensions.y / smoothing_radius).ceil() as u32,
-            (bbox_dimensions.z / smoothing_radius).ceil() as u32,
+            (config.bbox_dimensions.x / config.smoothing_radius).ceil() as u32,
+            (config.bbox_dimensions.y / config.smoothing_radius).ceil() as u32,
+            (config.bbox_dimensions.z / config.smoothing_radius).ceil() as u32,
         );
 
         let spatial_lookup = SpatialLookup::new(
             wgpu_device,
-            particle_cnt,
-            smoothing_radius,
+            config.particle_cnt,
+            config.smoothing_radius,
             cell_cnt,
             &position_buffer,
         );
 
         let compute_density_task = FluidSimulation::create_compute_density_task(
             wgpu_device,
-            particle_cnt,
+            config.particle_cnt,
             ghost_particle_cnt,
-            smoothing_radius,
-            mass,
+            config.smoothing_radius,
+            config.mass,
             cell_cnt,
             &position_buffer,
             spatial_lookup.keys(),
@@ -116,8 +117,8 @@ impl FluidSimulation {
 
         let display_density_task = FluidSimulation::create_display_density_task(
             wgpu_device,
-            particle_cnt,
-            bbox_dimensions,
+            config.particle_cnt,
+            config.bbox_dimensions,
             &position_buffer,
             &density_buffer,
             &particle_display_buffer,
@@ -125,13 +126,13 @@ impl FluidSimulation {
 
         let update_particle_task = FluidSimulation::create_update_particles_task(
             wgpu_device,
-            particle_cnt,
+            config.particle_cnt,
             ghost_particle_cnt,
-            smoothing_radius,
-            damping,
-            mass,
-            gravity,
-            bbox_dimensions,
+            config.smoothing_radius,
+            config.damping,
+            config.mass,
+            config.gravity,
+            config.bbox_dimensions,
             &position_buffer,
             &velocity_buffer,
             &density_buffer,
@@ -140,13 +141,13 @@ impl FluidSimulation {
 
         let compute_force_task = FluidSimulation::create_compute_force_task(
             wgpu_device,
-            particle_cnt,
+            config.particle_cnt,
             ghost_particle_cnt,
-            smoothing_radius,
-            mass,
-            gas_const,
-            rest_density,
-            viscosity,
+            config.smoothing_radius,
+            config.mass,
+            config.gas_const,
+            config.rest_density,
+            config.viscosity,
             cell_cnt,
             &position_buffer,
             &velocity_buffer,
@@ -158,15 +159,13 @@ impl FluidSimulation {
         );
 
         Self {
-            particle_cnt,
-            smoothing_radius,
-            bbox_dimensions,
+            config, 
 
             bbox_geometry,
-            position_buffer,
-            velocity_buffer,
-            density_buffer,
-            force_buffer,
+            _position_buffer: position_buffer,
+            _velocity_buffer: velocity_buffer,
+            _density_buffer: density_buffer,
+            _force_buffer: force_buffer,
 
             spatial_lookup,
             compute_density_task,
@@ -765,7 +764,7 @@ impl FluidSimulation {
             geometry: Geometry::Instanced {
                 vertex_cnt: 4,
                 instance_buffer: self.particle_display_buffer.clone(),
-                instance_cnt: self.particle_cnt,
+                instance_cnt: self.config.particle_cnt,
             },
         });
     }
